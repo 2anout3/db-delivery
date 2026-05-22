@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Доставки</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <div id="topbar"></div>
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h1>Рабочее пространство</h1>
+            <p id="roleHint" class="muted"></p>
+          </div>
+          <div id="pageActions" class="actions"></div>
+        </div>
+
+        <div id="summaryGrid" class="summary-grid"></div>
+
+        <div class="toolbar">
+          <input id="searchInput" placeholder="Поиск по трек-номеру, описанию, отправителю или получателю" />
+          <select id="scopeFilter">
+            <option value="all">Все</option>
+            <option value="outgoing">Исходящие</option>
+            <option value="incoming">Входящие</option>
+            <option value="courier">Ожидают курьера</option>
+            <option value="active">Активные</option>
+            <option value="done">Завершенные</option>
+          </select>
+          <button id="reloadButton" class="secondary inline-button">Обновить</button>
+          <span class="muted" id="resultCount"></span>
+        </div>
+        <div id="message" class="message hidden"></div>
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Доставка</th>
+              <th>Участники</th>
+              <th>Статус</th>
+              <th>Маршрут</th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody id="deliveriesTable"></tbody>
+        </table>
+        <div id="emptyState" class="message hidden"></div>
+      </section>
+    </main>
+
+    <script type="module">
+      import { api } from "/static/api/client.js";
+      import { hideMessage, renderTopbar, requireSession, roleLabel, showMessage } from "/static/components/layout.js";
+
+      const profile = await requireSession();
+      if (!profile) {
+        throw new Error("Unauthorized");
+      }
+
+      renderTopbar(document.getElementById("topbar"), profile);
+
+      const table = document.getElementById("deliveriesTable");
+      const message = document.getElementById("message");
+      const searchInput = document.getElementById("searchInput");
+      const scopeFilter = document.getElementById("scopeFilter");
+      const reloadButton = document.getElementById("reloadButton");
+      const summaryGrid = document.getElementById("summaryGrid");
+      const resultCount = document.getElementById("resultCount");
+      const pageActions = document.getElementById("pageActions");
+      const roleHint = document.getElementById("roleHint");
+      const emptyState = document.getElementById("emptyState");
+      const isCourier = profile.effective_role === "courier";
+      let deliveries = [];
+
+      roleHint.textContent =
+        profile.effective_role === "client"
+          ? "Клиентский кабинет: здесь показаны ваши исходящие и входящие доставки."
+          : `Роль: ${roleLabel(profile)}. Вы видите только доступные вам действия и доставки.`;
+
+      pageActions.innerHTML = [
+        `<a href="/static/pages/profile.html"><button class="secondary inline-button">Мой профиль</button></a>`,
+        profile.permissions.can_create_delivery
+          ? `<a href="/static/pages/create-delivery.html"><button class="inline-button">Создать доставку</button></a>`
+          : "",
+        profile.permissions.can_assign_courier
+          ? `<a href="/static/pages/assign-courier.html"><button class="secondary inline-button">Назначить курьера</button></a>`
+          : "",
+        profile.permissions.can_manage_accounts
+          ? `<a href="/static/pages/admin.html"><button class="secondary inline-button">Управление аккаунтами</button></a>`
+          : "",
+      ].join("");
+
+      function renderSummary(items) {
+        const created = items.filter((item) => item.current_status.code === "CREATED").length;
+        const inTransit = items.filter((item) => item.current_status.code === "IN_TRANSIT").length;
+        const delivered = items.filter((item) => item.current_status.code === "DELIVERED").length;
+        const assigned = items.filter((item) => item.current_status.code === "COURIER_ASSIGNED").length;
+        const courierOpen = items.filter((item) => item.assignments.some((assignment) => assignment.courier_id === null)).length;
+
+        summaryGrid.innerHTML = `
+          <article class="stat-card"><div class="muted">Всего доставок</div><strong>${items.length}</strong></article>
+          <article class="stat-card"><div class="muted">Созданы</div><strong>${created}</strong></article>
+          <article class="stat-card"><div class="muted">Курьер / ожидают</div><strong>${assigned} / ${courierOpen}</strong></article>
+          <article class="stat-card"><div class="muted">В пути / доставлены</div><strong>${inTransit} / ${delivered}</strong></article>
+        `;
+      }
+
+      function applyFilters() {
+        const query = searchInput.value.trim().toLowerCase();
+        const scope = scopeFilter.value;
+        const filtered = deliveries.filter((item) => {
+          const matchesSearch = [
+            item.tracking_number,
+            item.description || "",
+            item.sender.person.full_name,
+            item.recipient.person.full_name,
+            item.origin_branch.name,
+            item.destination_branch.name,
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(query);
+
+          const matchesScope =
+            scope === "all" ||
+            (scope === "outgoing" && item.sender_client_id === profile.client_id) ||
+            (scope === "incoming" && item.recipient_client_id === profile.client_id) ||
+            (scope === "courier" && item.assignments.some((assignment) => assignment.courier_id === null)) ||
+            (scope === "active" && !["DELIVERED", "CANCELLED"].includes(item.current_status.code)) ||
+            (scope === "done" && ["DELIVERED", "CANCELLED"].includes(item.current_status.code));
+
+          return matchesSearch && matchesScope;
+        });
+        renderSummary(filtered);
+        renderRows(filtered);
+      }
+
+      function renderRows(items) {
+        resultCount.textContent = `Показано: ${items.length}`;
+        emptyState.className = "message hidden";
+        if (!items.length) {
+          table.innerHTML = "";
+          showMessage(emptyState, "По текущим условиям доставки не найдены.", "");
+          return;
+        }
+
+        table.innerHTML = items
+          .map((item) => {
+            const canSelfAssign =
+              isCourier && item.assignments.some((assignment) => assignment.courier_id === null);
+            const actions = [
+              `<a href="/static/pages/delivery-details.html?id=${item.delivery_id}"><button class="secondary inline-button">Детали</button></a>`,
+              profile.permissions.can_assign_courier
+                ? `<a href="/static/pages/assign-courier.html?delivery_id=${item.delivery_id}"><button class="inline-button">Курьер</button></a>`
+                : "",
+              canSelfAssign
+                ? `<button class="inline-button" data-self-assign="${item.delivery_id}">Взять</button>`
+                : "",
+            ].join("");
+
+            return `
+              <tr>
+                <td>${item.delivery_id}</td>
+                <td>
+                  <strong>${item.tracking_number}</strong><br />
+                  <span class="muted">${item.description}</span>
+                </td>
+                <td>
+                  <strong>Отправитель:</strong> ${item.sender.person.full_name}<br />
+                  <strong>Получатель:</strong> ${item.recipient.person.full_name}
+                </td>
+                <td>
+                  <span class="badge">${item.current_status.name}</span><br />
+                  <span class="muted">${
+                    [
+                      item.sender_courier_required ? "курьер у отправителя" : "",
+                      item.recipient_courier_required ? "курьер получателю" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "без курьерской заявки"
+                  }</span>
+                </td>
+                <td>${item.origin_branch.name} → ${item.destination_branch.name}<br /><span class="muted">${item.total_cost}</span></td>
+                <td class="actions">${actions}</td>
+              </tr>
+            `;
+          })
+          .join("");
+      }
+
+      async function loadDeliveries() {
+        hideMessage(message);
+        try {
+          deliveries = await api.listDeliveries();
+          applyFilters();
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      }
+
+      searchInput.addEventListener("input", applyFilters);
+      scopeFilter.addEventListener("change", applyFilters);
+
+      reloadButton.addEventListener("click", loadDeliveries);
+      table.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-self-assign]");
+        if (!button) {
+          return;
+        }
+
+        hideMessage(message);
+        button.disabled = true;
+        try {
+          await api.selfAssignDelivery(Number(button.dataset.selfAssign));
+          showMessage(message, "Доставка назначена вам", "success");
+          await loadDeliveries();
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        } finally {
+          button.disabled = false;
+        }
+      });
+      loadDeliveries();
+    </script>
+  </body>
+</html>

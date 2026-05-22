@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Вход | Delivery Service</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="page hero">
+      <section class="hero-copy">
+        <div class="badge">Система доставки</div>
+        <h1>Все пользователи системы</h1>
+        <div id="usersMessage" class="message hidden"></div>
+        <div id="usersList" class="seed-profiles" aria-label="Все пользователи"></div>
+      </section>
+
+      <section class="card auth-panel">
+        <div class="tabs">
+          <button id="loginTab" class="tab-button active">Вход</button>
+          <button id="registerTab" class="tab-button">Регистрация</button>
+        </div>
+
+        <form id="loginForm" class="layout">
+          <div>
+            <label for="loginValue">Логин</label>
+            <input id="loginValue" name="login" required />
+          </div>
+          <div>
+            <label for="loginPassword">Пароль</label>
+            <input id="loginPassword" name="password" type="password" required />
+          </div>
+          <button type="submit">Войти</button>
+        </form>
+
+        <form id="registerForm" class="layout hidden">
+          <div>
+            <label for="registerLogin">Логин</label>
+            <input id="registerLogin" name="login" required />
+          </div>
+          <div>
+            <label for="registerPassword">Пароль</label>
+            <input id="registerPassword" name="password" type="password" required />
+          </div>
+          <div>
+            <label for="registerName">ФИО</label>
+            <input id="registerName" name="full_name" required />
+          </div>
+          <div class="grid-2">
+            <div>
+              <label for="registerPhone">Телефон</label>
+              <input id="registerPhone" name="phone" required />
+            </div>
+            <div>
+              <label for="registerEmail">Email</label>
+              <input id="registerEmail" name="email" type="email" required />
+            </div>
+          </div>
+          <button type="submit">Зарегистрироваться</button>
+        </form>
+
+        <div id="authMessage" class="message hidden"></div>
+      </section>
+    </main>
+
+    <script type="module">
+      import { api, saveAuth } from "/static/api/client.js";
+      import { hideMessage, showMessage } from "/static/components/layout.js";
+
+      const loginTab = document.getElementById("loginTab");
+      const registerTab = document.getElementById("registerTab");
+      const loginForm = document.getElementById("loginForm");
+      const registerForm = document.getElementById("registerForm");
+      const message = document.getElementById("authMessage");
+      const usersList = document.getElementById("usersList");
+      const usersMessage = document.getElementById("usersMessage");
+      const fallbackUsers = [
+        { login: "admin", password_hint: "admin123", full_name: "Администратор системы", effective_role: "admin" },
+        { login: "operator1", password_hint: "operator123", full_name: "Ольга Операторова", effective_role: "employee", employee_role: "operator" },
+        { login: "manager1", password_hint: "manager123", full_name: "Сергей Менеджеров", effective_role: "employee", employee_role: "manager" },
+        { login: "courier1", password_hint: "courier123", full_name: "Иван Курьеров", effective_role: "courier" },
+        { login: "courier2", password_hint: "courier123", full_name: "Алексей Быстров", effective_role: "courier" },
+        { login: "courier3", password_hint: "courier123", full_name: "Никита Грузов", effective_role: "courier" },
+        { login: "client1", password_hint: "client123", full_name: "Анна Иванова", effective_role: "client", client_status: "active" },
+        { login: "client2", password_hint: "client123", full_name: "Петр Смирнов", effective_role: "client", client_status: "active" },
+        { login: "client3", password_hint: "client123", full_name: "Мария Орлова", effective_role: "client", client_status: "active" },
+        { login: "client4", password_hint: "client123", full_name: "Дмитрий Волков", effective_role: "client", client_status: "blocked" },
+      ];
+
+      async function submitLogin() {
+        hideMessage(message);
+        try {
+          const payload = Object.fromEntries(new FormData(loginForm).entries());
+          const result = await api.login(payload);
+          saveAuth(result.access_token, result.role);
+          window.location.href = "/static/pages/deliveries.html";
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      }
+
+      function toggleTab(active) {
+        const isLogin = active === "login";
+        loginForm.classList.toggle("hidden", !isLogin);
+        registerForm.classList.toggle("hidden", isLogin);
+        loginTab.classList.toggle("active", isLogin);
+        registerTab.classList.toggle("active", !isLogin);
+        hideMessage(message);
+      }
+
+      function renderUsers(users) {
+        usersList.innerHTML = users
+          .map((user) => {
+            const roleParts = [user.effective_role || user.role, user.employee_role, user.client_status].filter(Boolean);
+            const password = user.password_hint || "";
+            return `
+              <article class="list-item seed-profile" data-login="${user.login}" data-password="${password}">
+                <strong>${user.full_name || user.login}</strong>
+                <span><b>Логин:</b> ${user.login}</span>
+                <span><b>Пароль:</b> ${password || "задан пользователем"}</span>
+                <small>Роль: ${roleParts.join(", ") || "не указана"}</small>
+                ${
+                  password
+                    ? `<button class="secondary inline-button" type="button">Войти как этот пользователь</button>`
+                    : `<button class="secondary inline-button" type="button" disabled>Пароль скрыт</button>`
+                }
+              </article>
+            `;
+          })
+          .join("");
+
+        usersList.querySelectorAll(".seed-profile button:not([disabled])").forEach((button) => {
+          button.addEventListener("click", async () => {
+            const profile = button.closest(".seed-profile");
+            toggleTab("login");
+            loginForm.elements.login.value = profile.dataset.login;
+            loginForm.elements.password.value = profile.dataset.password;
+            await submitLogin();
+          });
+        });
+      }
+
+      async function loadUsers() {
+        try {
+          const users = await api.listLoginPageUsers();
+          renderUsers(users);
+        } catch (error) {
+          showMessage(usersMessage, "База недоступна. Показаны тестовые пользователи из SQL.", "");
+          renderUsers(fallbackUsers);
+        }
+      }
+
+      loginTab.addEventListener("click", () => toggleTab("login"));
+      registerTab.addEventListener("click", () => toggleTab("register"));
+
+      loginForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        await submitLogin();
+      });
+
+      loadUsers();
+
+      registerForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        hideMessage(message);
+        try {
+          const payload = Object.fromEntries(new FormData(registerForm).entries());
+          const result = await api.register(payload);
+          saveAuth(result.access_token, result.role);
+          window.location.href = "/static/pages/deliveries.html";
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      });
+    </script>
+  </body>
+</html>

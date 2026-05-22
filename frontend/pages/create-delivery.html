@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Создание доставки</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <div id="topbar"></div>
+      <section class="card">
+        <h1>Создание доставки</h1>
+        <p id="pageNote" class="muted"></p>
+        <form id="deliveryForm" class="layout">
+          <div id="senderClientBlock" class="grid-2 hidden">
+            <div>
+              <label for="sender_client_id">Отправитель</label>
+              <select id="sender_client_id" name="sender_client_id"></select>
+            </div>
+            <div>
+              <label for="recipient_client_id">Получатель</label>
+              <select id="recipient_client_id" name="recipient_client_id" required></select>
+            </div>
+          </div>
+
+          <div id="recipientOnlyBlock" class="grid-2">
+            <div>
+              <label for="recipient_client_id_client">Получатель</label>
+              <select id="recipient_client_id_client" name="recipient_client_id_client" required></select>
+            </div>
+            <div>
+              <label for="description">Описание посылки</label>
+              <input id="description" name="description" />
+            </div>
+          </div>
+
+          <div id="descriptionAdminBlock" class="hidden">
+            <label for="description_admin">Описание посылки</label>
+            <input id="description_admin" name="description_admin" />
+          </div>
+
+          <div class="grid-2">
+            <div>
+              <label for="origin_city">Город отправления</label>
+              <select id="origin_city" name="origin_city" required></select>
+              <div id="originBranchBlock" class="hidden">
+                <label for="origin_branch_id">Филиал отправления</label>
+                <select id="origin_branch_id" name="origin_branch_id" required></select>
+              </div>
+            </div>
+            <div>
+              <label for="destination_city">Город получения</label>
+              <select id="destination_city" name="destination_city" required></select>
+              <div id="destinationBranchBlock" class="hidden">
+                <label for="destination_branch_id">Филиал назначения</label>
+                <select id="destination_branch_id" name="destination_branch_id" required></select>
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div>
+              <label for="declared_weight_kg">Вес (кг)</label>
+              <input id="declared_weight_kg" name="declared_weight_kg" type="number" step="0.01" required />
+            </div>
+            <div>
+              <label for="declared_value">Оценочная стоимость</label>
+              <input id="declared_value" name="declared_value" type="number" step="0.01" required />
+            </div>
+          </div>
+
+          <label>
+            <input id="senderCourierRequired" name="sender_courier_required" type="checkbox" />
+            Нужна услуга курьера для забора у отправителя
+          </label>
+
+          <div id="senderAddressCard" class="card hidden">
+            <h3>Адрес отправителя</h3>
+            <div class="grid-3">
+              <select name="sender_city" required></select>
+              <input name="sender_street" placeholder="Улица" required />
+              <input name="sender_house" placeholder="Дом" required />
+              <input name="sender_apartment" placeholder="Квартира" />
+              <input name="sender_postal_code" placeholder="Индекс" required />
+              <input name="sender_comment" placeholder="Комментарий" />
+            </div>
+          </div>
+
+          <button type="submit">Создать доставку</button>
+        </form>
+        <div id="message" class="message hidden"></div>
+      </section>
+    </main>
+
+    <script type="module">
+      import { api } from "/static/api/client.js";
+      import { hideMessage, renderTopbar, requireSession, roleLabel, showMessage } from "/static/components/layout.js";
+
+      const profile = await requireSession({ permission: "can_create_delivery" });
+      if (!profile) {
+        throw new Error("Unauthorized");
+      }
+
+      renderTopbar(document.getElementById("topbar"), profile);
+
+      const form = document.getElementById("deliveryForm");
+      const message = document.getElementById("message");
+      const pageNote = document.getElementById("pageNote");
+      const recipientSelect = document.getElementById("recipient_client_id_client");
+      const senderSelect = document.getElementById("sender_client_id");
+      const recipientAdminSelect = document.getElementById("recipient_client_id");
+      const originCitySelect = document.getElementById("origin_city");
+      const destinationCitySelect = document.getElementById("destination_city");
+      const originBranchSelect = document.getElementById("origin_branch_id");
+      const destinationBranchSelect = document.getElementById("destination_branch_id");
+      const originBranchBlock = document.getElementById("originBranchBlock");
+      const destinationBranchBlock = document.getElementById("destinationBranchBlock");
+      const senderCourierRequiredCheckbox = document.getElementById("senderCourierRequired");
+      const senderAddressCard = document.getElementById("senderAddressCard");
+      const senderAddressInputs = senderAddressCard.querySelectorAll("input, select");
+      const isAdmin = profile.effective_role === "admin";
+      let branchesByCity = new Map();
+
+      document.getElementById("senderClientBlock").classList.toggle("hidden", !isAdmin);
+      document.getElementById("recipientOnlyBlock").classList.toggle("hidden", isAdmin);
+      document.getElementById("descriptionAdminBlock").classList.toggle("hidden", !isAdmin);
+      pageNote.textContent = isAdmin
+        ? "Администратор может создавать доставку от имени любого клиента."
+        : `Роль: ${roleLabel(profile)}. Доставка будет создана от вашего имени.`;
+
+      function toAddress(prefix, entries) {
+        return {
+          city: entries.get(`${prefix}_city`),
+          street: entries.get(`${prefix}_street`),
+          house: entries.get(`${prefix}_house`),
+          apartment: entries.get(`${prefix}_apartment`) || "",
+          postal_code: entries.get(`${prefix}_postal_code`),
+          comment: entries.get(`${prefix}_comment`) || "",
+        };
+      }
+
+      function syncDeliveryMode() {
+        const needsSenderCourier = senderCourierRequiredCheckbox.checked;
+        senderAddressCard.classList.toggle("hidden", !needsSenderCourier);
+        senderAddressInputs.forEach((input) => {
+          input.required = needsSenderCourier && ["sender_city", "sender_street", "sender_house", "sender_postal_code"].includes(input.name);
+        });
+        syncSenderCourierCity();
+      }
+
+      function renderCityOptions(cities) {
+        return [`<option value="">Выберите город</option>`, ...cities.map((city) => `<option value="${city}">${city}</option>`)].join("");
+      }
+
+      function renderBranchOptions(branches) {
+        return branches
+          .map((item) => `<option value="${item.branch_id}">${item.name}</option>`)
+          .join("");
+      }
+
+      function syncBranchSelect(citySelect, branchSelect, branchBlock) {
+        const city = citySelect.value;
+        const cityBranches = branchesByCity.get(city) || [];
+        const hasCity = Boolean(city);
+        branchBlock.classList.toggle("hidden", !hasCity);
+        branchSelect.required = hasCity;
+        branchSelect.disabled = !hasCity;
+        branchSelect.innerHTML = hasCity ? renderBranchOptions(cityBranches) : "";
+      }
+
+      function syncBranchCity(branchSelect, citySelect, branchBlock) {
+        const selectedBranch = [...branchesByCity.values()]
+          .flat()
+          .find((branch) => String(branch.branch_id) === branchSelect.value);
+        if (selectedBranch && citySelect.value !== selectedBranch.address.city) {
+          citySelect.value = selectedBranch.address.city;
+          syncBranchSelect(citySelect, branchSelect, branchBlock);
+          branchSelect.value = String(selectedBranch.branch_id);
+        }
+      }
+
+      function syncSenderCourierCity() {
+        if (senderCourierRequiredCheckbox.checked && originCitySelect.value) {
+          form.elements.sender_city.value = originCitySelect.value;
+        }
+      }
+
+      async function loadReferenceData() {
+        hideMessage(message);
+        try {
+          const [clients, branches] = await Promise.all([
+            api.listClients(),
+            api.listBranches(),
+          ]);
+          const recipientOptions = clients
+            .map((item) => {
+              const selfLabel = item.client_id === profile.client_id ? " — себе" : "";
+              return `<option value="${item.client_id}">${item.person.full_name} (#${item.client_id})${selfLabel}</option>`;
+            })
+            .join("");
+
+          recipientSelect.innerHTML = recipientOptions;
+          recipientAdminSelect.innerHTML = clients
+            .map((item) => `<option value="${item.client_id}">${item.person.full_name} (#${item.client_id})</option>`)
+            .join("");
+          senderSelect.innerHTML = clients
+            .map((item) => `<option value="${item.client_id}">${item.person.full_name} (#${item.client_id})</option>`)
+            .join("");
+
+          branchesByCity = branches.reduce((map, branch) => {
+            const city = branch.address.city;
+            if (!map.has(city)) {
+              map.set(city, []);
+            }
+            map.get(city).push(branch);
+            return map;
+          }, new Map());
+
+          const branchCities = [...branchesByCity.keys()].sort((left, right) => left.localeCompare(right, "ru"));
+          const branchCityOptions = renderCityOptions(branchCities);
+          originCitySelect.innerHTML = branchCityOptions;
+          destinationCitySelect.innerHTML = branchCityOptions;
+          syncBranchSelect(originCitySelect, originBranchSelect, originBranchBlock);
+          syncBranchSelect(destinationCitySelect, destinationBranchSelect, destinationBranchBlock);
+
+          form.elements.sender_city.innerHTML = branchCityOptions;
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        hideMessage(message);
+        try {
+          if (senderCourierRequiredCheckbox.checked) {
+            syncSenderCourierCity();
+          }
+          const entries = new FormData(form);
+          const description = isAdmin ? entries.get("description_admin") : entries.get("description");
+          const payload = {
+            recipient_client_id: Number(isAdmin ? entries.get("recipient_client_id") : entries.get("recipient_client_id_client")),
+            origin_branch_id: Number(entries.get("origin_branch_id")),
+            destination_branch_id: Number(entries.get("destination_branch_id")),
+            declared_weight_kg: entries.get("declared_weight_kg"),
+            declared_value: entries.get("declared_value"),
+            description: description?.trim() || null,
+            sender_courier_required: entries.get("sender_courier_required") === "on",
+          };
+
+          if (payload.sender_courier_required) {
+            payload.sender_address = toAddress("sender", entries);
+          }
+
+          if (isAdmin) {
+            payload.sender_client_id = Number(entries.get("sender_client_id"));
+          }
+
+          const delivery = await api.createDelivery(payload);
+          showMessage(message, `Доставка создана. Трек-номер: ${delivery.tracking_number}`, "success");
+          form.reset();
+          syncDeliveryMode();
+          syncBranchSelect(originCitySelect, originBranchSelect, originBranchBlock);
+          syncBranchSelect(destinationCitySelect, destinationBranchSelect, destinationBranchBlock);
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      });
+
+      senderCourierRequiredCheckbox.addEventListener("change", syncDeliveryMode);
+      originCitySelect.addEventListener("change", () => {
+        syncBranchSelect(originCitySelect, originBranchSelect, originBranchBlock);
+        syncSenderCourierCity();
+      });
+      destinationCitySelect.addEventListener("change", () =>
+        syncBranchSelect(destinationCitySelect, destinationBranchSelect, destinationBranchBlock)
+      );
+      originBranchSelect.addEventListener("change", () => syncBranchCity(originBranchSelect, originCitySelect, originBranchBlock));
+      destinationBranchSelect.addEventListener("change", () =>
+        syncBranchCity(destinationBranchSelect, destinationCitySelect, destinationBranchBlock)
+      );
+      syncDeliveryMode();
+      loadReferenceData();
+    </script>
+  </body>
+</html>

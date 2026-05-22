@@ -1,0 +1,411 @@
+:root {
+  --bg: #f4f6f8;
+  --panel: #ffffff;
+  --panel-2: #eef2f7;
+  --text: #20242a;
+  --muted: #667085;
+  --accent: #2563eb;
+  --accent-dark: #1d4ed8;
+  --border: #d8dee6;
+  --ok: #16845b;
+  --warn: #b7791f;
+  --error: #b42318;
+  --shadow: 0 8px 24px rgba(16, 24, 40, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+a {
+  color: inherit;
+}
+
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.hero,
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.65fr);
+  gap: 24px;
+  min-height: 100vh;
+  align-items: start;
+}
+
+.hero-copy {
+  padding: 32px;
+}
+
+.hero-copy h1 {
+  font-size: clamp(2.4rem, 4vw, 4.4rem);
+  margin: 0 0 12px;
+  letter-spacing: 0;
+}
+
+.hero-copy p {
+  color: var(--muted);
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.seed-profiles {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.seed-profiles .list-item {
+  display: grid;
+  gap: 4px;
+}
+
+.seed-profiles span {
+  color: var(--text);
+}
+
+.seed-profiles span b {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.seed-profiles small {
+  color: var(--muted);
+}
+
+.seed-profiles button {
+  margin-top: 4px;
+  justify-self: start;
+}
+
+.auth-panel {
+  padding: 28px;
+  margin: 24px;
+}
+
+.tabs,
+.toolbar,
+.grid-2,
+.grid-3,
+.actions {
+  display: grid;
+  gap: 12px;
+}
+
+.tabs {
+  grid-template-columns: repeat(2, 1fr);
+  margin-bottom: 16px;
+}
+
+.grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.toolbar {
+  grid-template-columns: 1fr auto auto;
+  margin: 16px 0 20px;
+}
+
+.actions {
+  grid-template-columns: repeat(auto-fit, minmax(180px, max-content));
+}
+
+.card {
+  padding: 24px;
+  margin-bottom: 20px;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+.section-head h1,
+.section-head h2,
+.section-head h3 {
+  margin: 0 0 8px;
+}
+
+.layout {
+  display: grid;
+  gap: 20px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 24px;
+  margin-bottom: 20px;
+}
+
+.brand {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.topbar nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+label {
+  display: block;
+  font-size: 0.92rem;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+input,
+select,
+textarea,
+button,
+.button-link {
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  padding: 12px 14px;
+  font: inherit;
+}
+
+textarea {
+  min-height: 100px;
+  resize: vertical;
+}
+
+button,
+.button-link {
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  transition: transform 0.18s ease, background 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
+}
+
+button:hover,
+.button-link:hover {
+  background: var(--accent-dark);
+  transform: translateY(-1px);
+}
+
+button.secondary,
+.tab-button,
+.button-link.secondary {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
+.tab-button.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.inline-button,
+.button-link.inline-button {
+  width: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+th {
+  color: var(--muted);
+  font-size: 0.86rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: var(--panel-2);
+  font-size: 0.84rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.message {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #f8fafc;
+}
+
+.message.error {
+  color: var(--error);
+  border-color: rgba(180, 35, 24, 0.25);
+  background: rgba(180, 35, 24, 0.08);
+}
+
+.message.success {
+  color: var(--ok);
+  border-color: rgba(34, 124, 77, 0.24);
+  background: rgba(34, 124, 77, 0.08);
+}
+
+.message.hidden,
+.hidden {
+  display: none;
+}
+
+.detail-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.summary-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  margin-bottom: 18px;
+}
+
+.stat-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  background: #f8fafc;
+}
+
+.stat-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 1.8rem;
+}
+
+.list {
+  display: grid;
+  gap: 12px;
+}
+
+.list-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  background: #ffffff;
+}
+
+.profile-summary {
+  display: grid;
+  gap: 16px;
+}
+
+.profile-card {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.profile-card h2 {
+  margin: 0 0 4px;
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  color: #ffffff;
+  background: var(--accent);
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.permission-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.permission-ok {
+  color: var(--ok);
+}
+
+.permission-no {
+  color: var(--muted);
+}
+
+@media (max-width: 900px) {
+  .hero {
+    grid-template-columns: 1fr;
+    min-height: auto;
+  }
+
+  .hero-copy,
+  .auth-panel {
+    margin: 0;
+    padding: 24px;
+  }
+
+  .toolbar,
+  .grid-2,
+  .grid-3 {
+    grid-template-columns: 1fr;
+  }
+
+  .section-head {
+    flex-direction: column;
+  }
+
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .seed-profiles {
+    grid-template-columns: 1fr;
+  }
+}

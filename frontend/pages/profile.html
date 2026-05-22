@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Профиль</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <div id="topbar"></div>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h1>Профиль пользователя</h1>
+            <p class="muted">Личные данные, роль и доступные действия в системе.</p>
+          </div>
+          <div class="actions">
+            <a href="/static/pages/deliveries.html"><button class="secondary inline-button">К доставкам</button></a>
+          </div>
+        </div>
+
+        <div id="message" class="message hidden"></div>
+        <div id="profileSummary" class="profile-summary"></div>
+      </section>
+
+      <section class="card">
+        <h2>Контактные данные</h2>
+        <div id="contactInfo" class="detail-grid"></div>
+      </section>
+
+      <section id="clientSection" class="card hidden">
+        <h2>Данные клиента</h2>
+        <div id="clientInfo" class="detail-grid"></div>
+      </section>
+
+      <section id="employeeSection" class="card hidden">
+        <h2>Данные сотрудника</h2>
+        <div id="employeeInfo" class="detail-grid"></div>
+      </section>
+
+      <section class="card">
+        <h2>Доступные действия</h2>
+        <div id="permissionsList" class="list"></div>
+      </section>
+    </main>
+
+    <script type="module">
+      import { hideMessage, renderTopbar, requireSession, roleLabel, showMessage } from "/static/components/layout.js";
+
+      const profile = await requireSession();
+      if (!profile) {
+        throw new Error("Unauthorized");
+      }
+
+      renderTopbar(document.getElementById("topbar"), profile);
+
+      const message = document.getElementById("message");
+      const profileSummary = document.getElementById("profileSummary");
+      const contactInfo = document.getElementById("contactInfo");
+      const clientSection = document.getElementById("clientSection");
+      const clientInfo = document.getElementById("clientInfo");
+      const employeeSection = document.getElementById("employeeSection");
+      const employeeInfo = document.getElementById("employeeInfo");
+      const permissionsList = document.getElementById("permissionsList");
+
+      function value(text) {
+        return text === null || text === undefined || text === "" ? "Не указано" : text;
+      }
+
+      function formatDate(dateValue) {
+        return dateValue ? new Date(dateValue).toLocaleString() : "Не указано";
+      }
+
+      function item(label, content) {
+        return `<article class="list-item"><strong>${label}</strong><br />${value(content)}</article>`;
+      }
+
+      function permissionLabel(key) {
+        const labels = {
+          can_view_deliveries: "Просмотр доставок",
+          can_create_delivery: "Создание доставок",
+          can_assign_courier: "Назначение курьеров",
+          can_self_assign_delivery: "Самоназначение курьера",
+          can_update_status: "Изменение статусов",
+          can_manage_accounts: "Управление аккаунтами",
+          can_manage_clients: "Управление клиентами",
+        };
+        return labels[key] || key;
+      }
+
+      function renderProfile() {
+        hideMessage(message);
+        profileSummary.innerHTML = `
+          <article class="profile-card">
+            <div class="avatar">${(profile.full_name || profile.login || "П").slice(0, 1).toUpperCase()}</div>
+            <div>
+              <h2>${value(profile.full_name)}</h2>
+              <p class="muted">${profile.login} · ${roleLabel(profile)}</p>
+            </div>
+          </article>
+          <div class="detail-grid">
+            ${item("ID пользователя", profile.user_id)}
+            ${item("Системная роль", profile.role)}
+            ${item("Рабочая роль", profile.effective_role)}
+            ${item("Аккаунт создан", formatDate(profile.created_at))}
+          </div>
+        `;
+
+        contactInfo.innerHTML = [
+          item("ФИО", profile.full_name),
+          item("Телефон", profile.phone),
+          item("Email", profile.email),
+        ].join("");
+
+        if (profile.client_id) {
+          clientSection.classList.remove("hidden");
+          clientInfo.innerHTML = [
+            item("ID клиента", profile.client_id),
+            item("Статус клиента", profile.client_status),
+            item("Дата регистрации", formatDate(profile.registered_at)),
+          ].join("");
+        }
+
+        if (profile.employee_id) {
+          employeeSection.classList.remove("hidden");
+          employeeInfo.innerHTML = [
+            item("ID сотрудника", profile.employee_id),
+            item("Роль сотрудника", profile.employee_role),
+            item("Дата найма", profile.hired_at ? new Date(profile.hired_at).toLocaleDateString() : null),
+            item("Активен", profile.is_active ? "Да" : "Нет"),
+            item("Филиал", profile.branch ? `${profile.branch.name}, ${profile.branch.address.city}` : null),
+            profile.transport_type ? item("Транспорт", profile.transport_type) : "",
+            profile.capacity_kg ? item("Грузоподъемность", `${profile.capacity_kg} кг`) : "",
+          ].join("");
+        }
+
+        permissionsList.innerHTML = Object.entries(profile.permissions || {})
+          .map(([key, allowed]) => {
+            const className = allowed ? "permission-ok" : "permission-no";
+            return `
+              <article class="list-item permission-row">
+                <span>${permissionLabel(key)}</span>
+                <strong class="${className}">${allowed ? "Доступно" : "Недоступно"}</strong>
+              </article>
+            `;
+          })
+          .join("");
+      }
+
+      try {
+        renderProfile();
+      } catch (error) {
+        showMessage(message, error.message, "error");
+      }
+    </script>
+  </body>
+</html>

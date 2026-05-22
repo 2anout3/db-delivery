@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Детали доставки</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <div id="topbar"></div>
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h1>Детали доставки</h1>
+            <p class="muted">Полная карточка заказа, участников и этапов обработки.</p>
+          </div>
+        </div>
+        <div id="message" class="message hidden"></div>
+        <div id="deliveryInfo" class="detail-grid"></div>
+      </section>
+
+      <section class="card">
+        <h2>Участники доставки</h2>
+        <div id="participants" class="detail-grid"></div>
+      </section>
+
+      <section id="courierRequestSection" class="card hidden">
+        <h2>Курьерская доставка получателю</h2>
+        <form id="courierRequestForm" class="layout">
+          <div class="grid-3">
+            <select name="city" required></select>
+            <input name="street" placeholder="Улица" required />
+            <input name="house" placeholder="Дом" required />
+            <input name="apartment" placeholder="Квартира" />
+            <input name="postal_code" placeholder="Индекс" required />
+            <input name="comment" placeholder="Комментарий" />
+          </div>
+          <button type="submit">Запросить курьера</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Назначения курьеров</h2>
+        <div id="assignmentsList" class="list"></div>
+      </section>
+
+      <section class="card">
+        <h2>История статусов</h2>
+        <div id="historyList" class="list"></div>
+      </section>
+
+      <section id="statusSection" class="card hidden">
+        <h2>Изменить статус</h2>
+        <form id="statusForm" class="grid-2">
+          <div>
+            <label for="new_status_id">Новый статус</label>
+            <select id="new_status_id" name="new_status_id" required></select>
+          </div>
+          <div>
+            <label for="comment">Комментарий</label>
+            <input id="comment" name="comment" />
+          </div>
+          <button type="submit">Сохранить</button>
+        </form>
+      </section>
+    </main>
+
+    <script type="module">
+      import { api } from "/static/api/client.js";
+      import { hideMessage, renderTopbar, requireSession, showMessage } from "/static/components/layout.js";
+
+      const profile = await requireSession();
+      if (!profile) {
+        throw new Error("Unauthorized");
+      }
+
+      renderTopbar(document.getElementById("topbar"), profile);
+
+      const params = new URLSearchParams(window.location.search);
+      const deliveryId = params.get("id");
+      const message = document.getElementById("message");
+      const deliveryInfo = document.getElementById("deliveryInfo");
+      const participants = document.getElementById("participants");
+      const assignmentsList = document.getElementById("assignmentsList");
+      const historyList = document.getElementById("historyList");
+      const statusSection = document.getElementById("statusSection");
+      const statusForm = document.getElementById("statusForm");
+      const statusSelect = document.getElementById("new_status_id");
+      const courierRequestSection = document.getElementById("courierRequestSection");
+      const courierRequestForm = document.getElementById("courierRequestForm");
+      let currentDelivery = null;
+
+      function syncRecipientCourierCity(delivery) {
+        const city = delivery.destination_branch.address.city;
+        courierRequestForm.elements.city.innerHTML = `<option value="${city}">${city}</option>`;
+      }
+
+      function renderDelivery(delivery) {
+        deliveryInfo.innerHTML = `
+          <div class="list-item"><strong>ID</strong><br />${delivery.delivery_id}</div>
+          <div class="list-item"><strong>Трек-номер</strong><br />${delivery.tracking_number}</div>
+          <div class="list-item"><strong>Статус</strong><br />${delivery.current_status.name}</div>
+          <div class="list-item"><strong>Маршрут</strong><br />${delivery.origin_branch.name} → ${delivery.destination_branch.name}</div>
+          <div class="list-item"><strong>Вес</strong><br />${delivery.declared_weight_kg} кг</div>
+          <div class="list-item"><strong>Стоимость</strong><br />${delivery.total_cost}<br /><span class="muted">База: ${delivery.base_cost} · Страховка: ${delivery.extra_cost}</span></div>
+          <div class="list-item"><strong>Курьер у отправителя</strong><br />${delivery.sender_courier_required ? "Нужен" : "Не нужен"}</div>
+          <div class="list-item"><strong>Курьер получателю</strong><br />${delivery.recipient_courier_required ? "Запрошен" : "Не запрошен"}</div>
+          <div class="list-item"><strong>Описание</strong><br />${delivery.description}</div>
+          <div class="list-item"><strong>Создана</strong><br />${new Date(delivery.created_at).toLocaleString()}</div>
+        `;
+      }
+
+      function renderParticipants(delivery) {
+        participants.innerHTML = `
+          <article class="list-item">
+            <strong>Отправитель</strong><br />
+            ${delivery.sender.person.full_name}<br />
+            <span class="muted">${delivery.sender.person.phone} · ${delivery.sender.person.email}</span>
+          </article>
+          <article class="list-item">
+            <strong>Получатель</strong><br />
+            ${delivery.recipient.person.full_name}<br />
+            <span class="muted">${delivery.recipient.person.phone} · ${delivery.recipient.person.email}</span>
+          </article>
+          <article class="list-item">
+            <strong>${delivery.sender_courier_required ? "Адрес забора у отправителя" : "Филиал отправления"}</strong><br />
+            ${delivery.sender_address.city}, ${delivery.sender_address.street}, ${delivery.sender_address.house}
+          </article>
+          <article class="list-item">
+            <strong>Филиал получения</strong><br />
+            ${delivery.recipient_address.city}, ${delivery.recipient_address.street}, ${delivery.recipient_address.house}
+          </article>
+          ${
+            delivery.recipient_courier_address
+              ? `<article class="list-item">
+                  <strong>Адрес курьера получателю</strong><br />
+                  ${delivery.recipient_courier_address.city}, ${delivery.recipient_courier_address.street}, ${delivery.recipient_courier_address.house}
+                </article>`
+              : ""
+          }
+        `;
+      }
+
+      function renderAssignments(assignments) {
+        if (!assignments.length) {
+          assignmentsList.innerHTML = `<article class="list-item muted">Курьер еще не назначен.</article>`;
+          return;
+        }
+
+        assignmentsList.innerHTML = assignments
+          .map(
+            (item) => `
+              <article class="list-item">
+                <strong>${item.courier_id ? `Курьер #${item.courier_id}` : "Курьер ожидает назначения"}</strong><br />
+                <span class="muted">Услуга: ${item.service_type} · Стоимость: ${item.service_cost}</span><br />
+                ${item.courier_id ? `Назначен: ${new Date(item.assigned_at).toLocaleString()}` : "Заявка создана"}
+              </article>
+            `
+          )
+          .join("");
+      }
+
+      function renderHistory(history) {
+        historyList.innerHTML = history
+          .map(
+            (item) => `
+              <article class="list-item">
+                <strong>${item.old_status ? item.old_status.name : "Создание"} → ${item.new_status.name}</strong><br />
+                <span class="muted">${new Date(item.changed_at).toLocaleString()}</span><br />
+                ${item.comment || "Без комментария"}
+              </article>
+            `
+          )
+          .join("");
+      }
+
+      function getAllowedNextStatusCodes(delivery) {
+        const currentCode = delivery.current_status.code;
+        const hasCourierRequests = delivery.assignments.length > 0;
+        const hasOpenCourierRequests = delivery.assignments.some((assignment) => assignment.courier_id === null);
+
+        if (["DELIVERED", "CANCELLED"].includes(currentCode)) {
+          return [];
+        }
+        if (currentCode === "CREATED") {
+          return ["PROCESSING", "CANCELLED"];
+        }
+        if (currentCode === "PROCESSING") {
+          if (hasCourierRequests && !hasOpenCourierRequests) {
+            return ["COURIER_ASSIGNED", "CANCELLED"];
+          }
+          return hasCourierRequests ? ["CANCELLED"] : ["IN_TRANSIT", "CANCELLED"];
+        }
+        if (currentCode === "COURIER_ASSIGNED") {
+          return hasOpenCourierRequests ? ["CANCELLED"] : ["IN_TRANSIT", "CANCELLED"];
+        }
+        if (currentCode === "IN_TRANSIT") {
+          return ["DELIVERED", "CANCELLED"];
+        }
+        return [];
+      }
+
+      function renderStatusForm(delivery, statuses) {
+        const allowedCodes = getAllowedNextStatusCodes(delivery);
+        const allowedStatuses = statuses.filter((item) => allowedCodes.includes(item.code));
+
+        if (!allowedStatuses.length) {
+          statusSection.classList.add("hidden");
+          return;
+        }
+
+        statusSelect.innerHTML = allowedStatuses
+          .map((item) => `<option value="${item.status_id}">${item.name}</option>`)
+          .join("");
+        statusSection.classList.remove("hidden");
+      }
+
+      async function loadPage() {
+        hideMessage(message);
+        try {
+          const requests = [api.getDelivery(deliveryId), api.getHistory(deliveryId)];
+          if (profile.permissions.can_update_status) {
+            requests.push(api.listStatuses());
+          }
+          const [delivery, history, statuses = []] = await Promise.all(requests);
+          currentDelivery = delivery;
+
+          renderDelivery(delivery);
+          renderParticipants(delivery);
+          renderAssignments(delivery.assignments);
+          renderHistory(history);
+          const canRequestRecipientCourier =
+            profile.client_id === delivery.recipient_client_id && !delivery.recipient_courier_required;
+          courierRequestSection.classList.toggle("hidden", !canRequestRecipientCourier);
+          syncRecipientCourierCity(delivery);
+
+          if (profile.permissions.can_update_status) {
+            renderStatusForm(delivery, statuses);
+          }
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      }
+
+      statusForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        hideMessage(message);
+        try {
+          const payload = Object.fromEntries(new FormData(statusForm).entries());
+          payload.new_status_id = Number(payload.new_status_id);
+          await api.updateDeliveryStatus(deliveryId, payload);
+          showMessage(message, "Статус обновлен", "success");
+          await loadPage();
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      });
+
+      courierRequestForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        hideMessage(message);
+        try {
+          syncRecipientCourierCity(currentDelivery);
+          const entries = new FormData(courierRequestForm);
+          await api.requestRecipientCourier(deliveryId, {
+            recipient_address: {
+              city: entries.get("city"),
+              street: entries.get("street"),
+              house: entries.get("house"),
+              apartment: entries.get("apartment") || "",
+              postal_code: entries.get("postal_code"),
+              comment: entries.get("comment") || "",
+            },
+          });
+          showMessage(message, "Курьерская доставка для получателя запрошена", "success");
+          courierRequestForm.reset();
+          await loadPage();
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      });
+
+      loadPage();
+    </script>
+  </body>
+</html>

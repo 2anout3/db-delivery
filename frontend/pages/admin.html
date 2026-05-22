@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Админ панель</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <div id="topbar"></div>
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h1>Админ панель</h1>
+            <p class="muted">Администратор видит и управляет всем: аккаунтами, доставками и операционными сценариями.</p>
+          </div>
+        </div>
+        <form id="accountForm" class="layout">
+          <div class="grid-2">
+            <div>
+              <label for="role">Роль аккаунта</label>
+              <select id="role" name="role" required>
+                <option value="client">client</option>
+                <option value="employee">employee</option>
+                <option value="courier">courier</option>
+                <option value="admin">admin</option>
+              </select>
+            </div>
+            <div>
+              <label for="login">Логин</label>
+              <input id="login" name="login" required />
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div>
+              <label for="password">Пароль</label>
+              <input id="password" name="password" type="password" required />
+            </div>
+            <div>
+              <label for="full_name">ФИО</label>
+              <input id="full_name" name="full_name" required />
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div>
+              <label for="phone">Телефон</label>
+              <input id="phone" name="phone" required />
+            </div>
+            <div>
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" required />
+            </div>
+          </div>
+
+          <section id="clientFields" class="card">
+            <h3>Поля клиента</h3>
+            <label for="client_status">Статус клиента</label>
+            <select id="client_status" name="client_status">
+              <option value="active">active</option>
+              <option value="inactive">inactive</option>
+              <option value="blocked">blocked</option>
+            </select>
+          </section>
+
+          <section id="employeeFields" class="card hidden">
+            <h3>Поля сотрудника</h3>
+            <div class="grid-2">
+              <div>
+                <label for="branch_id">Филиал</label>
+                <select id="branch_id" name="branch_id"></select>
+              </div>
+              <div>
+                <label for="employee_role">Роль сотрудника</label>
+                <input id="employee_role" name="employee_role" placeholder="operator / admin / courier" />
+              </div>
+            </div>
+            <label>
+              <input id="is_active" name="is_active" type="checkbox" checked />
+              Активный сотрудник
+            </label>
+          </section>
+
+          <section id="courierFields" class="card hidden">
+            <h3>Поля курьера</h3>
+            <div class="grid-2">
+              <div>
+                <label for="transport_type">Тип транспорта</label>
+                <select id="transport_type" name="transport_type">
+                  <option value="car">car</option>
+                  <option value="foot">foot</option>
+                  <option value="bicycle">bicycle</option>
+                  <option value="motorcycle">motorcycle</option>
+                  <option value="truck">truck</option>
+                </select>
+              </div>
+              <div>
+                <label for="capacity_kg">Грузоподъемность (кг)</label>
+                <input id="capacity_kg" name="capacity_kg" type="number" step="0.01" />
+              </div>
+            </div>
+          </section>
+
+          <button type="submit">Создать аккаунт</button>
+        </form>
+        <div id="message" class="message hidden"></div>
+      </section>
+    </main>
+
+    <script type="module">
+      import { api } from "/static/api/client.js";
+      import { hideMessage, renderTopbar, requireSession, showMessage } from "/static/components/layout.js";
+
+      const profile = await requireSession({ permission: "can_manage_accounts" });
+      if (!profile) {
+        throw new Error("Unauthorized");
+      }
+
+      renderTopbar(document.getElementById("topbar"), profile);
+
+      const form = document.getElementById("accountForm");
+      const roleSelect = document.getElementById("role");
+      const branchSelect = document.getElementById("branch_id");
+      const clientFields = document.getElementById("clientFields");
+      const employeeFields = document.getElementById("employeeFields");
+      const courierFields = document.getElementById("courierFields");
+      const message = document.getElementById("message");
+
+      function syncFields() {
+        const role = roleSelect.value;
+        clientFields.classList.toggle("hidden", role !== "client");
+        employeeFields.classList.toggle("hidden", role === "client");
+        courierFields.classList.toggle("hidden", role !== "courier");
+      }
+
+      async function loadBranches() {
+        try {
+          const branches = await api.listBranches();
+          branchSelect.innerHTML = branches
+            .map((item) => `<option value="${item.branch_id}">${item.name}</option>`)
+            .join("");
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      }
+
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        hideMessage(message);
+        try {
+          const entries = new FormData(form);
+          const role = entries.get("role");
+          const payload = {
+            login: entries.get("login"),
+            password: entries.get("password"),
+            full_name: entries.get("full_name"),
+            phone: entries.get("phone"),
+            email: entries.get("email"),
+            role,
+            client_status: entries.get("client_status") || "active",
+            is_active: document.getElementById("is_active").checked,
+          };
+
+          if (role !== "client") {
+            payload.branch_id = Number(entries.get("branch_id"));
+            payload.employee_role =
+              entries.get("employee_role") || (role === "employee" ? "operator" : role);
+          }
+
+          if (role === "courier") {
+            payload.transport_type = entries.get("transport_type");
+            payload.capacity_kg = entries.get("capacity_kg");
+          }
+
+          const result = await api.createAdminAccount(payload);
+          showMessage(message, `Аккаунт создан: ${result.login} (${result.role})`, "success");
+          form.reset();
+          document.getElementById("is_active").checked = true;
+          syncFields();
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        }
+      });
+
+      roleSelect.addEventListener("change", syncFields);
+      syncFields();
+      loadBranches();
+    </script>
+  </body>
+</html>
