@@ -5,6 +5,7 @@
 Проект состоит из backend API, статического frontend-интерфейса и PostgreSQL-базы данных, в которой хранится основная бизнес-модель: пользователи, клиенты, сотрудники, филиалы, доставки, курьерские заявки, статусы и история изменений.
 
 drawio - https://drive.google.com/file/d/1rSVkm3VPIOsu2z7i0wLDaWZUNuvN7sAo/view?usp=drive_link
+
 dbdesigner - https://dbdesigner.page.link/bNYcCjd1Pu6psTvA7
 
 ## Стек проекта
