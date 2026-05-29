@@ -38,11 +38,6 @@ export function renderTopbar(container, profile = getProfile()) {
       show: Boolean(profile?.permissions?.can_create_delivery),
     },
     {
-      href: "/static/pages/assign-courier.html",
-      label: "Назначить курьера",
-      show: Boolean(profile?.permissions?.can_assign_courier),
-    },
-    {
       href: "/static/pages/admin.html",
       label: "Админ панель",
       show: Boolean(profile?.permissions?.can_manage_accounts),

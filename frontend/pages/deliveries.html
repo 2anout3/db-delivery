@@ -74,6 +74,7 @@
       const emptyState = document.getElementById("emptyState");
       const isCourier = profile.effective_role === "courier";
       let deliveries = [];
+      let statuses = [];
 
       roleHint.textContent =
         profile.effective_role === "client"
@@ -84,9 +85,6 @@
         `<a href="/static/pages/profile.html"><button class="secondary inline-button">Мой профиль</button></a>`,
         profile.permissions.can_create_delivery
           ? `<a href="/static/pages/create-delivery.html"><button class="inline-button">Создать доставку</button></a>`
-          : "",
-        profile.permissions.can_assign_courier
-          ? `<a href="/static/pages/assign-courier.html"><button class="secondary inline-button">Назначить курьера</button></a>`
           : "",
         profile.permissions.can_manage_accounts
           ? `<a href="/static/pages/admin.html"><button class="secondary inline-button">Управление аккаунтами</button></a>`
@@ -138,6 +136,51 @@
         renderRows(filtered);
       }
 
+      function canSelfAssignDelivery(item) {
+        return (
+          isCourier &&
+          Number(item.declared_weight_kg) <= Number(profile.capacity_kg) &&
+          item.assignments.some(
+            (assignment) =>
+              assignment.courier_id === null &&
+              assignment.call_address.city === profile.branch?.address?.city &&
+              (
+                (
+                  assignment.service_type === "pickup" &&
+                  item.current_status.code === "WAITING_COURIER" &&
+                  item.origin_branch.branch_id === profile.branch_id
+                ) ||
+                (
+                  assignment.service_type === "delivery" &&
+                  item.current_status.code === "AT_DESTINATION_BRANCH" &&
+                  item.destination_branch.branch_id === profile.branch_id
+                )
+              )
+          )
+        );
+      }
+
+      function getCourierNextStatus(item) {
+        if (!isCourier) {
+          return null;
+        }
+
+        const assignedServices = item.assignments
+          .filter((assignment) => assignment.courier_id === profile.employee_id)
+          .map((assignment) => assignment.service_type);
+
+        const nextCode =
+          item.current_status.code === "COURIER_ASSIGNED" && assignedServices.includes("pickup")
+            ? "COURIER_PICKED_UP"
+            : item.current_status.code === "AT_DESTINATION_BRANCH" && assignedServices.includes("delivery")
+              ? "COURIER_DELIVERING_RECIPIENT"
+              : item.current_status.code === "COURIER_DELIVERING_RECIPIENT" && assignedServices.includes("delivery")
+                ? "COURIER_DELIVERED"
+                : null;
+
+        return nextCode ? statuses.find((status) => status.code === nextCode) : null;
+      }
+
       function renderRows(items) {
         resultCount.textContent = `Показано: ${items.length}`;
         emptyState.className = "message hidden";
@@ -149,15 +192,15 @@
 
         table.innerHTML = items
           .map((item) => {
-            const canSelfAssign =
-              isCourier && item.assignments.some((assignment) => assignment.courier_id === null);
+            const canSelfAssign = canSelfAssignDelivery(item);
+            const nextCourierStatus = getCourierNextStatus(item);
             const actions = [
               `<a href="/static/pages/delivery-details.html?id=${item.delivery_id}"><button class="secondary inline-button">Детали</button></a>`,
-              profile.permissions.can_assign_courier
-                ? `<a href="/static/pages/assign-courier.html?delivery_id=${item.delivery_id}"><button class="inline-button">Курьер</button></a>`
-                : "",
               canSelfAssign
                 ? `<button class="inline-button" data-self-assign="${item.delivery_id}">Взять</button>`
+                : "",
+              nextCourierStatus
+                ? `<button class="inline-button" data-next-status="${item.delivery_id}" data-status-id="${nextCourierStatus.status_id}">${nextCourierStatus.name}</button>`
                 : "",
             ].join("");
 
@@ -194,7 +237,13 @@
       async function loadDeliveries() {
         hideMessage(message);
         try {
-          deliveries = await api.listDeliveries();
+          const requests = [api.listDeliveries()];
+          if (isCourier) {
+            requests.push(api.listStatuses());
+          }
+          const [deliveryItems, statusItems = []] = await Promise.all(requests);
+          deliveries = deliveryItems;
+          statuses = statusItems;
           applyFilters();
         } catch (error) {
           showMessage(message, error.message, "error");
@@ -206,7 +255,7 @@
 
       reloadButton.addEventListener("click", loadDeliveries);
       table.addEventListener("click", async (event) => {
-        const button = event.target.closest("[data-self-assign]");
+        const button = event.target.closest("[data-self-assign], [data-next-status]");
         if (!button) {
           return;
         }
@@ -214,8 +263,16 @@
         hideMessage(message);
         button.disabled = true;
         try {
-          await api.selfAssignDelivery(Number(button.dataset.selfAssign));
-          showMessage(message, "Доставка назначена вам", "success");
+          if (button.dataset.selfAssign) {
+            await api.selfAssignDelivery(Number(button.dataset.selfAssign));
+            showMessage(message, "Доставка назначена вам", "success");
+          } else {
+            await api.updateDeliveryStatus(Number(button.dataset.nextStatus), {
+              new_status_id: Number(button.dataset.statusId),
+              comment: "",
+            });
+            showMessage(message, "Статус обновлен", "success");
+          }
           await loadDeliveries();
         } catch (error) {
           showMessage(message, error.message, "error");

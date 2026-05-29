@@ -81,7 +81,6 @@
         const labels = {
           can_view_deliveries: "Просмотр доставок",
           can_create_delivery: "Создание доставок",
-          can_assign_courier: "Назначение курьеров",
           can_self_assign_delivery: "Самоназначение курьера",
           can_update_status: "Изменение статусов",
           can_manage_accounts: "Управление аккаунтами",
@@ -137,6 +136,7 @@
         }
 
         permissionsList.innerHTML = Object.entries(profile.permissions || {})
+          .filter(([key]) => key !== "can_assign_courier")
           .map(([key, allowed]) => {
             const className = allowed ? "permission-ok" : "permission-no";
             return `

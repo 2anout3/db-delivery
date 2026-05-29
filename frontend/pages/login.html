@@ -64,7 +64,7 @@
     </main>
 
     <script type="module">
-      import { api, saveAuth } from "/static/api/client.js";
+      import { api, saveAuth } from "/static/api/client.js?v=demo-login";
       import { hideMessage, showMessage } from "/static/components/layout.js";
 
       const loginTab = document.getElementById("loginTab");
@@ -75,16 +75,15 @@
       const usersList = document.getElementById("usersList");
       const usersMessage = document.getElementById("usersMessage");
       const fallbackUsers = [
-        { login: "admin", password_hint: "admin123", full_name: "Администратор системы", effective_role: "admin" },
-        { login: "operator1", password_hint: "operator123", full_name: "Ольга Операторова", effective_role: "employee", employee_role: "operator" },
-        { login: "manager1", password_hint: "manager123", full_name: "Сергей Менеджеров", effective_role: "employee", employee_role: "manager" },
-        { login: "courier1", password_hint: "courier123", full_name: "Иван Курьеров", effective_role: "courier" },
-        { login: "courier2", password_hint: "courier123", full_name: "Алексей Быстров", effective_role: "courier" },
-        { login: "courier3", password_hint: "courier123", full_name: "Никита Грузов", effective_role: "courier" },
-        { login: "client1", password_hint: "client123", full_name: "Анна Иванова", effective_role: "client", client_status: "active" },
-        { login: "client2", password_hint: "client123", full_name: "Петр Смирнов", effective_role: "client", client_status: "active" },
-        { login: "client3", password_hint: "client123", full_name: "Мария Орлова", effective_role: "client", client_status: "active" },
-        { login: "client4", password_hint: "client123", full_name: "Дмитрий Волков", effective_role: "client", client_status: "blocked" },
+        { user_id: 1, login: "admin", password_hint: "admin123", full_name: "Администратор системы", effective_role: "admin" },
+        { user_id: 2, login: "operator1", password_hint: "operator123", full_name: "Ольга Операторова", effective_role: "employee", employee_role: "operator" },
+        { user_id: 4, login: "courier1", password_hint: "courier123", full_name: "Иван Курьеров", effective_role: "courier" },
+        { user_id: 5, login: "courier2", password_hint: "courier123", full_name: "Алексей Быстров", effective_role: "courier" },
+        { user_id: 6, login: "courier3", password_hint: "courier123", full_name: "Никита Грузов", effective_role: "courier" },
+        { user_id: 7, login: "client1", password_hint: "client123", full_name: "Анна Иванова", effective_role: "client", client_status: "active" },
+        { user_id: 8, login: "client2", password_hint: "client123", full_name: "Петр Смирнов", effective_role: "client", client_status: "active" },
+        { user_id: 9, login: "client3", password_hint: "client123", full_name: "Мария Орлова", effective_role: "client", client_status: "active" },
+        { user_id: 10, login: "client4", password_hint: "client123", full_name: "Дмитрий Волков", effective_role: "client", client_status: "inactive" },
       ];
 
       async function submitLogin() {
@@ -114,28 +113,28 @@
             const roleParts = [user.effective_role || user.role, user.employee_role, user.client_status].filter(Boolean);
             const password = user.password_hint || "";
             return `
-              <article class="list-item seed-profile" data-login="${user.login}" data-password="${password}">
+              <article class="list-item seed-profile" data-user-id="${user.user_id}" data-login="${user.login}" data-password="${password}">
                 <strong>${user.full_name || user.login}</strong>
                 <span><b>Логин:</b> ${user.login}</span>
                 <span><b>Пароль:</b> ${password || "задан пользователем"}</span>
                 <small>Роль: ${roleParts.join(", ") || "не указана"}</small>
-                ${
-                  password
-                    ? `<button class="secondary inline-button" type="button">Войти как этот пользователь</button>`
-                    : `<button class="secondary inline-button" type="button" disabled>Пароль скрыт</button>`
-                }
+                <button class="secondary inline-button" type="button">Войти как этот пользователь</button>
               </article>
             `;
           })
           .join("");
 
-        usersList.querySelectorAll(".seed-profile button:not([disabled])").forEach((button) => {
+        usersList.querySelectorAll(".seed-profile button").forEach((button) => {
           button.addEventListener("click", async () => {
             const profile = button.closest(".seed-profile");
-            toggleTab("login");
-            loginForm.elements.login.value = profile.dataset.login;
-            loginForm.elements.password.value = profile.dataset.password;
-            await submitLogin();
+            hideMessage(message);
+            try {
+              const result = await api.demoLogin(Number(profile.dataset.userId));
+              saveAuth(result.access_token, result.role);
+              window.location.href = "/static/pages/deliveries.html";
+            } catch (error) {
+              showMessage(message, error.message, "error");
+            }
           });
         });
       }

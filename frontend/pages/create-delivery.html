@@ -70,6 +70,14 @@
             </div>
           </div>
 
+          <div id="costPreview" class="cost-preview" aria-live="polite">
+            <div>
+              <span class="muted">Предварительная стоимость</span>
+              <strong id="previewTotal">Заполните маршрут, вес и оценочную стоимость</strong>
+            </div>
+            <div id="previewBreakdown" class="muted"></div>
+          </div>
+
           <label>
             <input id="senderCourierRequired" name="sender_courier_required" type="checkbox" />
             Нужна услуга курьера для забора у отправителя
@@ -78,7 +86,7 @@
           <div id="senderAddressCard" class="card hidden">
             <h3>Адрес отправителя</h3>
             <div class="grid-3">
-              <select name="sender_city" required></select>
+              <input name="sender_city" placeholder="Город" required readonly />
               <input name="sender_street" placeholder="Улица" required />
               <input name="sender_house" placeholder="Дом" required />
               <input name="sender_apartment" placeholder="Квартира" />
@@ -94,7 +102,7 @@
     </main>
 
     <script type="module">
-      import { api } from "/static/api/client.js";
+      import { api } from "/static/api/client.js?v=cost-preview";
       import { hideMessage, renderTopbar, requireSession, roleLabel, showMessage } from "/static/components/layout.js";
 
       const profile = await requireSession({ permission: "can_create_delivery" });
@@ -119,8 +127,13 @@
       const senderCourierRequiredCheckbox = document.getElementById("senderCourierRequired");
       const senderAddressCard = document.getElementById("senderAddressCard");
       const senderAddressInputs = senderAddressCard.querySelectorAll("input, select");
+      const previewTotal = document.getElementById("previewTotal");
+      const previewBreakdown = document.getElementById("previewBreakdown");
       const isAdmin = profile.effective_role === "admin";
       let branchesByCity = new Map();
+      let allBranches = [];
+      let previewTimer = null;
+      let previewRequestId = 0;
 
       document.getElementById("senderClientBlock").classList.toggle("hidden", !isAdmin);
       document.getElementById("recipientOnlyBlock").classList.toggle("hidden", isAdmin);
@@ -159,7 +172,21 @@
           .join("");
       }
 
+      function renderClientBranchOptions(branches) {
+        return [
+          `<option value="">Выберите филиал</option>`,
+          ...branches.map((item) => `<option value="${item.branch_id}">${item.address.city} — ${item.name}</option>`),
+        ].join("");
+      }
+
       function syncBranchSelect(citySelect, branchSelect, branchBlock) {
+        if (!isAdmin) {
+          branchBlock.classList.remove("hidden");
+          branchSelect.required = true;
+          branchSelect.disabled = false;
+          return;
+        }
+
         const city = citySelect.value;
         const cityBranches = branchesByCity.get(city) || [];
         const hasCity = Boolean(city);
@@ -175,8 +202,10 @@
           .find((branch) => String(branch.branch_id) === branchSelect.value);
         if (selectedBranch && citySelect.value !== selectedBranch.address.city) {
           citySelect.value = selectedBranch.address.city;
-          syncBranchSelect(citySelect, branchSelect, branchBlock);
-          branchSelect.value = String(selectedBranch.branch_id);
+          if (isAdmin) {
+            syncBranchSelect(citySelect, branchSelect, branchBlock);
+            branchSelect.value = String(selectedBranch.branch_id);
+          }
         }
       }
 
@@ -186,6 +215,70 @@
         }
       }
 
+      function formatMoney(value) {
+        return new Intl.NumberFormat("ru-RU", {
+          style: "currency",
+          currency: "RUB",
+          minimumFractionDigits: 2,
+        }).format(Number(value));
+      }
+
+      function setPreviewPlaceholder(text) {
+        previewTotal.textContent = text;
+        previewBreakdown.textContent = "";
+      }
+
+      function buildCostPreviewPayload() {
+        const entries = new FormData(form);
+        const originBranchId = Number(entries.get("origin_branch_id"));
+        const destinationBranchId = Number(entries.get("destination_branch_id"));
+        const weight = entries.get("declared_weight_kg");
+        const declaredValue = entries.get("declared_value");
+
+        if (!originBranchId || !destinationBranchId || !weight || !declaredValue) {
+          return null;
+        }
+
+        return {
+          origin_branch_id: originBranchId,
+          destination_branch_id: destinationBranchId,
+          declared_weight_kg: weight,
+          declared_value: declaredValue,
+        };
+      }
+
+      async function updateCostPreview() {
+        const payload = buildCostPreviewPayload();
+        const requestId = ++previewRequestId;
+
+        if (!payload) {
+          setPreviewPlaceholder("Заполните маршрут, вес и оценочную стоимость");
+          return;
+        }
+
+        previewTotal.textContent = "Расчет...";
+        previewBreakdown.textContent = "";
+
+        try {
+          const cost = await api.previewDeliveryCost(payload);
+          if (requestId !== previewRequestId) {
+            return;
+          }
+          previewTotal.textContent = formatMoney(cost.total_cost);
+          previewBreakdown.textContent = `База: ${formatMoney(cost.base_cost)} · страховка: ${formatMoney(cost.extra_cost)}`;
+        } catch (error) {
+          if (requestId !== previewRequestId) {
+            return;
+          }
+          setPreviewPlaceholder(error.message);
+        }
+      }
+
+      function scheduleCostPreview() {
+        window.clearTimeout(previewTimer);
+        previewTimer = window.setTimeout(updateCostPreview, 250);
+      }
+
       async function loadReferenceData() {
         hideMessage(message);
         try {
@@ -193,6 +286,7 @@
             api.listClients(),
             api.listBranches(),
           ]);
+          allBranches = branches;
           const recipientOptions = clients
             .map((item) => {
               const selfLabel = item.client_id === profile.client_id ? " — себе" : "";
@@ -221,10 +315,17 @@
           const branchCityOptions = renderCityOptions(branchCities);
           originCitySelect.innerHTML = branchCityOptions;
           destinationCitySelect.innerHTML = branchCityOptions;
+          if (!isAdmin) {
+            originCitySelect.disabled = true;
+            destinationCitySelect.disabled = true;
+            originCitySelect.required = false;
+            destinationCitySelect.required = false;
+            originBranchSelect.innerHTML = renderClientBranchOptions(allBranches);
+            destinationBranchSelect.innerHTML = renderClientBranchOptions(allBranches);
+          }
           syncBranchSelect(originCitySelect, originBranchSelect, originBranchBlock);
           syncBranchSelect(destinationCitySelect, destinationBranchSelect, destinationBranchBlock);
-
-          form.elements.sender_city.innerHTML = branchCityOptions;
+          scheduleCostPreview();
         } catch (error) {
           showMessage(message, error.message, "error");
         }
@@ -260,9 +361,16 @@
           const delivery = await api.createDelivery(payload);
           showMessage(message, `Доставка создана. Трек-номер: ${delivery.tracking_number}`, "success");
           form.reset();
+          if (!isAdmin) {
+            originCitySelect.value = "";
+            destinationCitySelect.value = "";
+            originBranchSelect.innerHTML = renderClientBranchOptions(allBranches);
+            destinationBranchSelect.innerHTML = renderClientBranchOptions(allBranches);
+          }
           syncDeliveryMode();
           syncBranchSelect(originCitySelect, originBranchSelect, originBranchBlock);
           syncBranchSelect(destinationCitySelect, destinationBranchSelect, destinationBranchBlock);
+          scheduleCostPreview();
         } catch (error) {
           showMessage(message, error.message, "error");
         }
@@ -272,14 +380,22 @@
       originCitySelect.addEventListener("change", () => {
         syncBranchSelect(originCitySelect, originBranchSelect, originBranchBlock);
         syncSenderCourierCity();
+        scheduleCostPreview();
       });
-      destinationCitySelect.addEventListener("change", () =>
-        syncBranchSelect(destinationCitySelect, destinationBranchSelect, destinationBranchBlock)
-      );
-      originBranchSelect.addEventListener("change", () => syncBranchCity(originBranchSelect, originCitySelect, originBranchBlock));
-      destinationBranchSelect.addEventListener("change", () =>
-        syncBranchCity(destinationBranchSelect, destinationCitySelect, destinationBranchBlock)
-      );
+      destinationCitySelect.addEventListener("change", () => {
+        syncBranchSelect(destinationCitySelect, destinationBranchSelect, destinationBranchBlock);
+        scheduleCostPreview();
+      });
+      originBranchSelect.addEventListener("change", () => {
+        syncBranchCity(originBranchSelect, originCitySelect, originBranchBlock);
+        scheduleCostPreview();
+      });
+      destinationBranchSelect.addEventListener("change", () => {
+        syncBranchCity(destinationBranchSelect, destinationCitySelect, destinationBranchBlock);
+        scheduleCostPreview();
+      });
+      form.elements.declared_weight_kg.addEventListener("input", scheduleCostPreview);
+      form.elements.declared_value.addEventListener("input", scheduleCostPreview);
       syncDeliveryMode();
       loadReferenceData();
     </script>

@@ -77,6 +77,7 @@ export const api = {
   listLoginPageUsers: () => request("/auth/login-page-users"),
   register: (payload) => request("/auth/register", { method: "POST", body: JSON.stringify(payload) }),
   login: (payload) => request("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+  demoLogin: (userId) => request(`/auth/demo-login/${userId}`, { method: "POST" }),
   me: async () => {
     const profile = await request("/auth/me");
     saveProfile(profile);
@@ -90,6 +91,8 @@ export const api = {
   listStatuses: () => request("/reference/statuses"),
   listDeliveries: () => request("/deliveries"),
   getDelivery: (id) => request(`/deliveries/${id}`),
+  previewDeliveryCost: (payload) =>
+    request("/deliveries/cost-preview", { method: "POST", body: JSON.stringify(payload) }),
   createDelivery: (payload) => request("/deliveries", { method: "POST", body: JSON.stringify(payload) }),
   requestRecipientCourier: (id, payload) =>
     request(`/deliveries/${id}/recipient-courier-request`, { method: "POST", body: JSON.stringify(payload) }),

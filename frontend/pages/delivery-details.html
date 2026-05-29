@@ -29,7 +29,7 @@
         <h2>Курьерская доставка получателю</h2>
         <form id="courierRequestForm" class="layout">
           <div class="grid-3">
-            <select name="city" required></select>
+            <input name="city" placeholder="Город" required readonly />
             <input name="street" placeholder="Улица" required />
             <input name="house" placeholder="Дом" required />
             <input name="apartment" placeholder="Квартира" />
@@ -42,6 +42,7 @@
 
       <section class="card">
         <h2>Назначения курьеров</h2>
+        <div id="courierActions" class="actions"></div>
         <div id="assignmentsList" class="list"></div>
       </section>
 
@@ -89,11 +90,13 @@
       const statusSelect = document.getElementById("new_status_id");
       const courierRequestSection = document.getElementById("courierRequestSection");
       const courierRequestForm = document.getElementById("courierRequestForm");
+      const courierActions = document.getElementById("courierActions");
       let currentDelivery = null;
+      let currentStatuses = [];
 
       function syncRecipientCourierCity(delivery) {
         const city = delivery.destination_branch.address.city;
-        courierRequestForm.elements.city.innerHTML = `<option value="${city}">${city}</option>`;
+        courierRequestForm.elements.city.value = city;
       }
 
       function renderDelivery(delivery) {
@@ -161,6 +164,63 @@
           .join("");
       }
 
+      function canSelfAssignDelivery(delivery) {
+        return (
+          profile.effective_role === "courier" &&
+          Number(delivery.declared_weight_kg) <= Number(profile.capacity_kg) &&
+          delivery.assignments.some(
+            (assignment) =>
+              assignment.courier_id === null &&
+              assignment.call_address.city === profile.branch?.address?.city &&
+              (
+                (
+                  assignment.service_type === "pickup" &&
+                  delivery.current_status.code === "WAITING_COURIER" &&
+                  delivery.origin_branch.branch_id === profile.branch_id
+                ) ||
+                (
+                  assignment.service_type === "delivery" &&
+                  delivery.current_status.code === "AT_DESTINATION_BRANCH" &&
+                  delivery.destination_branch.branch_id === profile.branch_id
+                )
+              )
+          )
+        );
+      }
+
+      function getCourierNextStatus(delivery) {
+        if (profile.effective_role !== "courier") {
+          return null;
+        }
+
+        const assignedServices = delivery.assignments
+          .filter((assignment) => assignment.courier_id === profile.employee_id)
+          .map((assignment) => assignment.service_type);
+
+        const nextCode =
+          delivery.current_status.code === "COURIER_ASSIGNED" && assignedServices.includes("pickup")
+            ? "COURIER_PICKED_UP"
+            : delivery.current_status.code === "AT_DESTINATION_BRANCH" && assignedServices.includes("delivery")
+              ? "COURIER_DELIVERING_RECIPIENT"
+              : delivery.current_status.code === "COURIER_DELIVERING_RECIPIENT" && assignedServices.includes("delivery")
+                ? "COURIER_DELIVERED"
+                : null;
+
+        return nextCode ? currentStatuses.find((status) => status.code === nextCode) : null;
+      }
+
+      function renderCourierActions(delivery) {
+        const nextCourierStatus = getCourierNextStatus(delivery);
+        courierActions.innerHTML = [
+          canSelfAssignDelivery(delivery)
+            ? `<button class="inline-button" data-self-assign="${delivery.delivery_id}">Взять доставку</button>`
+            : "",
+          nextCourierStatus
+            ? `<button class="inline-button" data-next-status="${delivery.delivery_id}" data-status-id="${nextCourierStatus.status_id}">${nextCourierStatus.name}</button>`
+            : "",
+        ].join("");
+      }
+
       function renderHistory(history) {
         historyList.innerHTML = history
           .map(
@@ -178,32 +238,94 @@
       function getAllowedNextStatusCodes(delivery) {
         const currentCode = delivery.current_status.code;
         const hasCourierRequests = delivery.assignments.length > 0;
-        const hasOpenCourierRequests = delivery.assignments.some((assignment) => assignment.courier_id === null);
+        const hasPickupRequests = delivery.assignments.some((assignment) => assignment.service_type === "pickup");
+        const hasOpenPickupRequests = delivery.assignments.some(
+          (assignment) => assignment.service_type === "pickup" && assignment.courier_id === null
+        );
+        const hasDeliveryRequests = delivery.assignments.some((assignment) => assignment.service_type === "delivery");
+        const hasOpenDeliveryRequests = delivery.assignments.some(
+          (assignment) => assignment.service_type === "delivery" && assignment.courier_id === null
+        );
+        const sameBranchRoute = delivery.origin_branch.branch_id === delivery.destination_branch.branch_id;
 
         if (["DELIVERED", "CANCELLED"].includes(currentCode)) {
           return [];
         }
-        if (currentCode === "CREATED") {
-          return ["PROCESSING", "CANCELLED"];
+        if (
+          profile.effective_role === "courier" &&
+          !["COURIER_ASSIGNED", "AT_DESTINATION_BRANCH", "COURIER_DELIVERING_RECIPIENT"].includes(currentCode)
+        ) {
+          return [];
         }
-        if (currentCode === "PROCESSING") {
-          if (hasCourierRequests && !hasOpenCourierRequests) {
-            return ["COURIER_ASSIGNED", "CANCELLED"];
-          }
-          return hasCourierRequests ? ["CANCELLED"] : ["IN_TRANSIT", "CANCELLED"];
+        if (currentCode === "CREATED") {
+          return ["REGISTERED", "PROCESSING", "CANCELLED"];
+        }
+        if (["REGISTERED", "PROCESSING"].includes(currentCode)) {
+          return hasPickupRequests ? ["WAITING_COURIER", "CANCELLED"] : ["AT_ORIGIN_BRANCH", "CANCELLED"];
+        }
+        if (currentCode === "WAITING_COURIER") {
+          return ["CANCELLED"];
         }
         if (currentCode === "COURIER_ASSIGNED") {
-          return hasOpenCourierRequests ? ["CANCELLED"] : ["IN_TRANSIT", "CANCELLED"];
+          const isAssignedToCurrentCourier = delivery.assignments.some(
+            (assignment) => assignment.service_type === "pickup" && assignment.courier_id === profile.employee_id
+          );
+          if (profile.effective_role === "courier") {
+            return isAssignedToCurrentCourier ? ["COURIER_PICKED_UP"] : [];
+          }
+          return ["CANCELLED"];
+        }
+        if (currentCode === "COURIER_PICKED_UP") {
+          return profile.effective_role === "courier" ? [] : ["AT_ORIGIN_BRANCH", "CANCELLED"];
+        }
+        if (currentCode === "AT_ORIGIN_BRANCH") {
+          return sameBranchRoute ? ["AT_DESTINATION_BRANCH", "CANCELLED"] : ["IN_TRANSIT", "CANCELLED"];
         }
         if (currentCode === "IN_TRANSIT") {
+          return ["AT_DESTINATION_BRANCH", "CANCELLED"];
+        }
+        if (currentCode === "AT_DESTINATION_BRANCH") {
+          const isAssignedToCurrentCourier = delivery.assignments.some(
+            (assignment) => assignment.service_type === "delivery" && assignment.courier_id === profile.employee_id
+          );
+          if (profile.effective_role === "courier") {
+            return isAssignedToCurrentCourier && !hasOpenDeliveryRequests ? ["COURIER_DELIVERING_RECIPIENT"] : [];
+          }
+          if (hasDeliveryRequests) {
+            return hasOpenDeliveryRequests ? ["CANCELLED"] : ["CANCELLED"];
+          }
           return ["DELIVERED", "CANCELLED"];
+        }
+        if (currentCode === "COURIER_DELIVERING_RECIPIENT") {
+          const isAssignedToCurrentCourier = delivery.assignments.some(
+            (assignment) => assignment.service_type === "delivery" && assignment.courier_id === profile.employee_id
+          );
+          return profile.effective_role === "courier" && isAssignedToCurrentCourier ? ["COURIER_DELIVERED"] : [];
+        }
+        if (currentCode === "COURIER_DELIVERED") {
+          return profile.effective_role === "courier" ? [] : ["DELIVERED", "CANCELLED"];
         }
         return [];
       }
 
+      function canSetStatusForBranch(statusCode, delivery) {
+        if (profile.effective_role !== "employee") {
+          return true;
+        }
+        if (statusCode === "AT_ORIGIN_BRANCH") {
+          return profile.branch_id === delivery.origin_branch.branch_id;
+        }
+        if (statusCode === "AT_DESTINATION_BRANCH") {
+          return profile.branch_id === delivery.destination_branch.branch_id;
+        }
+        return true;
+      }
+
       function renderStatusForm(delivery, statuses) {
         const allowedCodes = getAllowedNextStatusCodes(delivery);
-        const allowedStatuses = statuses.filter((item) => allowedCodes.includes(item.code));
+        const allowedStatuses = statuses.filter(
+          (item) => allowedCodes.includes(item.code) && canSetStatusForBranch(item.code, delivery)
+        );
 
         if (!allowedStatuses.length) {
           statusSection.classList.add("hidden");
@@ -225,10 +347,12 @@
           }
           const [delivery, history, statuses = []] = await Promise.all(requests);
           currentDelivery = delivery;
+          currentStatuses = statuses;
 
           renderDelivery(delivery);
           renderParticipants(delivery);
           renderAssignments(delivery.assignments);
+          renderCourierActions(delivery);
           renderHistory(history);
           const canRequestRecipientCourier =
             profile.client_id === delivery.recipient_client_id && !delivery.recipient_courier_required;
@@ -254,6 +378,33 @@
           await loadPage();
         } catch (error) {
           showMessage(message, error.message, "error");
+        }
+      });
+
+      courierActions.addEventListener("click", async (event) => {
+        const button = event.target.closest("[data-self-assign], [data-next-status]");
+        if (!button) {
+          return;
+        }
+
+        hideMessage(message);
+        button.disabled = true;
+        try {
+          if (button.dataset.selfAssign) {
+            await api.selfAssignDelivery(Number(button.dataset.selfAssign));
+            showMessage(message, "Доставка назначена вам", "success");
+          } else {
+            await api.updateDeliveryStatus(Number(button.dataset.nextStatus), {
+              new_status_id: Number(button.dataset.statusId),
+              comment: "",
+            });
+            showMessage(message, "Статус обновлен", "success");
+          }
+          await loadPage();
+        } catch (error) {
+          showMessage(message, error.message, "error");
+        } finally {
+          button.disabled = false;
         }
       });
 

@@ -1,6 +1,7 @@
 from uuid import uuid4
 
 from fastapi import HTTPException
+from sqlalchemy import and_, or_
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session, joinedload
 
@@ -69,9 +70,9 @@ def get_permissions(user: models.UserAccount) -> dict[str, bool]:
     return {
         "can_view_deliveries": True,
         "can_create_delivery": effective_role in {"client", "admin"},
-        "can_assign_courier": effective_role in {"employee", "admin"},
+        "can_assign_courier": False,
         "can_self_assign_delivery": effective_role == "courier",
-        "can_update_status": effective_role in {"employee", "admin"},
+        "can_update_status": effective_role in {"employee", "admin", "courier"},
         "can_manage_accounts": effective_role == "admin",
         "can_manage_clients": effective_role in {"employee", "admin"},
     }
@@ -115,22 +116,52 @@ def require_capability(user: models.UserAccount, capability: str) -> None:
 def get_allowed_next_status_codes(delivery: models.Delivery) -> set[str]:
     current_code = delivery.current_status.code
     has_courier_requests = bool(delivery.assignments)
-    has_open_courier_requests = any(item.courier_id is None for item in delivery.assignments)
+    has_pickup_requests = any(item.service_type == "pickup" for item in delivery.assignments)
+    has_open_pickup_requests = any(
+        item.service_type == "pickup" and item.courier_id is None
+        for item in delivery.assignments
+    )
+    has_delivery_requests = any(item.service_type == "delivery" for item in delivery.assignments)
+    has_open_delivery_requests = any(
+        item.service_type == "delivery" and item.courier_id is None
+        for item in delivery.assignments
+    )
+    same_branch_route = delivery.origin_branch_id == delivery.destination_branch_id
 
     if current_code in {"DELIVERED", "CANCELLED"}:
         return set()
     if current_code == "CREATED":
-        return {"PROCESSING", "CANCELLED"}
-    if current_code == "PROCESSING":
+        return {"REGISTERED", "PROCESSING", "CANCELLED"}
+    if current_code in {"REGISTERED", "PROCESSING"}:
+        if has_pickup_requests:
+            return {"WAITING_COURIER", "CANCELLED"}
+        return {"AT_ORIGIN_BRANCH", "CANCELLED"}
+    if current_code == "WAITING_COURIER":
+        return {"CANCELLED"}
+    if current_code == "COURIER_ASSIGNED":
+        return {"COURIER_PICKED_UP", "CANCELLED"}
+    if current_code == "COURIER_PICKED_UP":
+        return {"AT_ORIGIN_BRANCH", "CANCELLED"}
+    if current_code == "AT_ORIGIN_BRANCH":
         next_codes = {"CANCELLED"}
-        if has_courier_requests and not has_open_courier_requests:
-            next_codes.add("COURIER_ASSIGNED")
-        elif not has_courier_requests:
+        if same_branch_route:
+            next_codes.add("AT_DESTINATION_BRANCH")
+        else:
             next_codes.add("IN_TRANSIT")
         return next_codes
-    if current_code == "COURIER_ASSIGNED":
-        return {"CANCELLED"} if has_open_courier_requests else {"IN_TRANSIT", "CANCELLED"}
     if current_code == "IN_TRANSIT":
+        return {"AT_DESTINATION_BRANCH", "CANCELLED"}
+    if current_code == "AT_DESTINATION_BRANCH":
+        next_codes = {"DELIVERED", "CANCELLED"}
+        if has_delivery_requests:
+            if has_open_delivery_requests:
+                next_codes.discard("DELIVERED")
+            else:
+                next_codes.add("COURIER_DELIVERING_RECIPIENT")
+        return next_codes
+    if current_code == "COURIER_DELIVERING_RECIPIENT":
+        return {"COURIER_DELIVERED", "CANCELLED"}
+    if current_code == "COURIER_DELIVERED":
         return {"DELIVERED", "CANCELLED"}
     return set()
 
@@ -147,6 +178,29 @@ def validate_status_transition(delivery: models.Delivery, new_status: models.Del
                 f"Нельзя перевести доставку из статуса '{delivery.current_status.name}' "
                 f"в статус '{new_status.name}'"
             ),
+        )
+
+
+def ensure_operator_can_confirm_branch_receipt(
+    user: models.UserAccount,
+    delivery: models.Delivery,
+    new_status: models.DeliveryStatus,
+) -> None:
+    if get_effective_role(user) != "employee" or not user.employee:
+        return
+
+    required_branch_by_status = {
+        "AT_ORIGIN_BRANCH": delivery.origin_branch_id,
+        "AT_DESTINATION_BRANCH": delivery.destination_branch_id,
+    }
+    required_branch_id = required_branch_by_status.get(new_status.code)
+    if required_branch_id is None:
+        return
+
+    if user.employee.branch_id != required_branch_id:
+        raise HTTPException(
+            status_code=403,
+            detail="Оператор может подтвердить приемку посылки только в своем филиале",
         )
 
 
@@ -177,16 +231,51 @@ def apply_delivery_scope(query, user: models.UserAccount):
             | (models.Delivery.recipient_client_id == user.client.client_id)
         )
     if effective_role == "courier" and user.employee:
-        waiting_for_courier = models.Delivery.assignments.any(
-            models.DeliveryCourierAssignment.courier_id.is_(None)
+        courier = user.employee.courier
+        courier_branch_id = user.employee.branch_id
+        courier_city = user.employee.branch.address.city if user.employee.branch else None
+        eligible_waiting_for_courier = (
+            models.Delivery.declared_weight_kg <= courier.capacity_kg
+        ) & models.Delivery.assignments.any(
+            (models.DeliveryCourierAssignment.courier_id.is_(None))
+            & models.DeliveryCourierAssignment.call_address.has(models.Address.city == courier_city)
+            & or_(
+                and_(
+                    models.DeliveryCourierAssignment.service_type == "pickup",
+                    models.Delivery.origin_branch_id == courier_branch_id,
+                    models.Delivery.current_status.has(models.DeliveryStatus.code == "WAITING_COURIER"),
+                ),
+                and_(
+                    models.DeliveryCourierAssignment.service_type == "delivery",
+                    models.Delivery.destination_branch_id == courier_branch_id,
+                    models.Delivery.current_status.has(models.DeliveryStatus.code == "AT_DESTINATION_BRANCH"),
+                ),
+            )
         )
         return query.where(
-            waiting_for_courier
+            eligible_waiting_for_courier
             | models.Delivery.assignments.any(
                 models.DeliveryCourierAssignment.courier_id == user.employee.employee_id
             )
         )
     return query
+
+
+def can_courier_take_assignment(
+    courier: models.Courier,
+    assignment: models.DeliveryCourierAssignment,
+    delivery: models.Delivery,
+) -> bool:
+    courier_branch_id = courier.employee.branch_id
+    courier_city = courier.employee.branch.address.city
+    assignment_city = assignment.call_address.city
+    if assignment_city != courier_city or delivery.declared_weight_kg > courier.capacity_kg:
+        return False
+    if assignment.service_type == "pickup":
+        return delivery.origin_branch_id == courier_branch_id
+    if assignment.service_type == "delivery":
+        return delivery.destination_branch_id == courier_branch_id
+    return False
 
 
 def can_access_delivery(user: models.UserAccount, delivery: models.Delivery) -> bool:
@@ -199,8 +288,11 @@ def can_access_delivery(user: models.UserAccount, delivery: models.Delivery) -> 
         assigned_to_current_courier = any(
             item.courier_id == user.employee.employee_id for item in delivery.assignments
         )
-        waiting_for_courier = any(item.courier_id is None for item in delivery.assignments)
-        return assigned_to_current_courier or waiting_for_courier
+        can_take_waiting_assignment = any(
+            item.courier_id is None and can_courier_take_assignment(user.employee.courier, item, delivery)
+            for item in delivery.assignments
+        )
+        return assigned_to_current_courier or can_take_waiting_assignment
     return True
 
 

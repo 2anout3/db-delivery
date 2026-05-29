@@ -63,7 +63,7 @@ CREATE TABLE clients (
     registered_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_clients_person FOREIGN KEY (person_id) REFERENCES persons(person_id) ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT fk_clients_user FOREIGN KEY (user_id) REFERENCES users_account(user_id) ON UPDATE CASCADE ON DELETE SET NULL,
-    CONSTRAINT chk_clients_status CHECK (client_status IN ('active', 'inactive', 'blocked'))
+    CONSTRAINT chk_clients_status CHECK (client_status IN ('active', 'inactive'))
 );
 
 CREATE TABLE employees (
@@ -77,7 +77,7 @@ CREATE TABLE employees (
     CONSTRAINT fk_employees_user FOREIGN KEY (user_id) REFERENCES users_account(user_id) ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT fk_employees_person FOREIGN KEY (person_id) REFERENCES persons(person_id) ON UPDATE CASCADE ON DELETE RESTRICT,
     CONSTRAINT fk_employees_branch FOREIGN KEY (branch_id) REFERENCES branches(branch_id) ON UPDATE CASCADE ON DELETE RESTRICT,
-    CONSTRAINT chk_employees_role CHECK (employee_role IN ('admin', 'manager', 'operator', 'courier')),
+    CONSTRAINT chk_employees_role CHECK (employee_role IN ('admin', 'operator', 'courier')),
     CONSTRAINT chk_employees_hired_at CHECK (hired_at <= CURRENT_DATE)
 );
 
@@ -389,6 +389,15 @@ DECLARE
     v_new_code VARCHAR(30);
     v_has_courier_requests BOOLEAN;
     v_has_open_courier_requests BOOLEAN;
+    v_has_pickup_requests BOOLEAN;
+    v_has_open_pickup_requests BOOLEAN;
+    v_has_delivery_requests BOOLEAN;
+    v_has_open_delivery_requests BOOLEAN;
+    v_same_branch_route BOOLEAN;
+    v_origin_branch_id INTEGER;
+    v_destination_branch_id INTEGER;
+    v_employee_role VARCHAR(20);
+    v_employee_branch_id INTEGER;
 BEGIN
     SELECT current_status_id
     INTO v_current_status_id
@@ -432,16 +441,80 @@ BEGIN
     )
     INTO v_has_open_courier_requests;
 
+    SELECT EXISTS (
+        SELECT 1
+        FROM delivery_courier_assignments
+        WHERE delivery_id = p_delivery_id
+          AND service_type = 'pickup'
+    )
+    INTO v_has_pickup_requests;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM delivery_courier_assignments
+        WHERE delivery_id = p_delivery_id
+          AND service_type = 'pickup'
+          AND courier_id IS NULL
+    )
+    INTO v_has_open_pickup_requests;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM delivery_courier_assignments
+        WHERE delivery_id = p_delivery_id
+          AND service_type = 'delivery'
+    )
+    INTO v_has_delivery_requests;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM delivery_courier_assignments
+        WHERE delivery_id = p_delivery_id
+          AND service_type = 'delivery'
+          AND courier_id IS NULL
+    )
+    INTO v_has_open_delivery_requests;
+
+    SELECT origin_branch_id, destination_branch_id, origin_branch_id = destination_branch_id
+    INTO v_origin_branch_id, v_destination_branch_id, v_same_branch_route
+    FROM deliveries
+    WHERE delivery_id = p_delivery_id;
+
     IF NOT (
-        (v_current_code = 'CREATED' AND v_new_code IN ('PROCESSING', 'CANCELLED'))
-        OR (v_current_code = 'PROCESSING' AND v_new_code = 'CANCELLED')
-        OR (v_current_code = 'PROCESSING' AND v_new_code = 'COURIER_ASSIGNED' AND v_has_courier_requests AND NOT v_has_open_courier_requests)
-        OR (v_current_code = 'PROCESSING' AND v_new_code = 'IN_TRANSIT' AND NOT v_has_courier_requests)
-        OR (v_current_code = 'COURIER_ASSIGNED' AND v_new_code = 'CANCELLED')
-        OR (v_current_code = 'COURIER_ASSIGNED' AND v_new_code = 'IN_TRANSIT' AND NOT v_has_open_courier_requests)
-        OR (v_current_code = 'IN_TRANSIT' AND v_new_code IN ('DELIVERED', 'CANCELLED'))
+        (v_current_code = 'CREATED' AND v_new_code IN ('REGISTERED', 'CANCELLED'))
+        OR (v_current_code = 'REGISTERED' AND v_new_code = 'WAITING_COURIER' AND v_has_pickup_requests)
+        OR (v_current_code = 'REGISTERED' AND v_new_code = 'AT_ORIGIN_BRANCH' AND NOT v_has_pickup_requests)
+        OR (v_current_code = 'REGISTERED' AND v_new_code = 'CANCELLED')
+        OR (v_current_code = 'WAITING_COURIER' AND v_new_code = 'COURIER_ASSIGNED' AND v_has_pickup_requests AND NOT v_has_open_pickup_requests)
+        OR (v_current_code = 'WAITING_COURIER' AND v_new_code = 'CANCELLED')
+        OR (v_current_code = 'COURIER_ASSIGNED' AND v_new_code IN ('COURIER_PICKED_UP', 'CANCELLED'))
+        OR (v_current_code = 'COURIER_PICKED_UP' AND v_new_code IN ('AT_ORIGIN_BRANCH', 'CANCELLED'))
+        OR (v_current_code = 'AT_ORIGIN_BRANCH' AND v_new_code = 'IN_TRANSIT' AND NOT v_same_branch_route)
+        OR (v_current_code = 'AT_ORIGIN_BRANCH' AND v_new_code = 'AT_DESTINATION_BRANCH' AND v_same_branch_route)
+        OR (v_current_code = 'AT_ORIGIN_BRANCH' AND v_new_code = 'CANCELLED')
+        OR (v_current_code = 'IN_TRANSIT' AND v_new_code IN ('AT_DESTINATION_BRANCH', 'CANCELLED'))
+        OR (v_current_code = 'AT_DESTINATION_BRANCH' AND v_new_code = 'COURIER_DELIVERING_RECIPIENT' AND v_has_delivery_requests AND NOT v_has_open_delivery_requests)
+        OR (v_current_code = 'AT_DESTINATION_BRANCH' AND v_new_code = 'DELIVERED' AND NOT v_has_delivery_requests)
+        OR (v_current_code = 'AT_DESTINATION_BRANCH' AND v_new_code = 'CANCELLED')
+        OR (v_current_code = 'COURIER_DELIVERING_RECIPIENT' AND v_new_code IN ('COURIER_DELIVERED', 'CANCELLED'))
+        OR (v_current_code = 'COURIER_DELIVERED' AND v_new_code IN ('DELIVERED', 'CANCELLED'))
     ) THEN
         RAISE EXCEPTION 'Invalid delivery status transition: % -> %', v_current_code, v_new_code;
+    END IF;
+
+    IF p_changed_by_employee_id IS NOT NULL THEN
+        SELECT employee_role, branch_id
+        INTO v_employee_role, v_employee_branch_id
+        FROM employees
+        WHERE employee_id = p_changed_by_employee_id;
+
+        IF v_employee_role = 'operator'
+           AND (
+               (v_new_code = 'AT_ORIGIN_BRANCH' AND v_employee_branch_id <> v_origin_branch_id)
+               OR (v_new_code = 'AT_DESTINATION_BRANCH' AND v_employee_branch_id <> v_destination_branch_id)
+           ) THEN
+            RAISE EXCEPTION 'Operator can confirm parcel acceptance only in own branch';
+        END IF;
     END IF;
 
     PERFORM set_config('app.changed_by_employee_id', COALESCE(p_changed_by_employee_id::TEXT, ''), true);
@@ -467,18 +540,12 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_assigned_status_id INTEGER;
-    v_processing_status_id INTEGER;
     v_current_status_code VARCHAR(30);
 BEGIN
     SELECT status_id
     INTO v_assigned_status_id
     FROM delivery_statuses
     WHERE code = 'COURIER_ASSIGNED';
-
-    SELECT status_id
-    INTO v_processing_status_id
-    FROM delivery_statuses
-    WHERE code = 'PROCESSING';
 
     SELECT delivery_statuses.code
     INTO v_current_status_code
@@ -488,10 +555,6 @@ BEGIN
 
     IF v_assigned_status_id IS NULL THEN
         RAISE EXCEPTION 'Status COURIER_ASSIGNED does not exist';
-    END IF;
-
-    IF v_processing_status_id IS NULL THEN
-        RAISE EXCEPTION 'Status PROCESSING does not exist';
     END IF;
 
     IF EXISTS (
@@ -529,21 +592,7 @@ BEGIN
         );
     END IF;
 
-    IF v_current_status_code = 'CREATED' THEN
-        CALL change_delivery_status(
-            p_delivery_id,
-            v_processing_status_id,
-            p_changed_by_employee_id,
-            'Доставка принята в обработку'
-        );
-    END IF;
-
-    IF NOT EXISTS (
-        SELECT 1
-        FROM delivery_courier_assignments
-        WHERE delivery_id = p_delivery_id
-          AND courier_id IS NULL
-    ) AND v_current_status_code <> 'COURIER_ASSIGNED' THEN
+    IF p_service_type = 'pickup' AND v_current_status_code = 'WAITING_COURIER' THEN
         CALL change_delivery_status(
             p_delivery_id,
             v_assigned_status_id,
@@ -674,7 +723,6 @@ SELECT setval('city_delivery_tariffs_tariff_id_seq', 45, true);
 INSERT INTO users_account (user_id, login, password_hash, role) VALUES
 (1, 'admin', '$pbkdf2-sha256$29000$F2KMMaY05hxDSIlRao0xJg$QKZ3ILaj.Zaott4LFd0d2tuDLkooG0epE8R3.RE704U', 'admin'),
 (2, 'operator1', '$pbkdf2-sha256$29000$KEWI0ZpzTolxbm1t7b3XOg$vTxvwLo5ewS1L9wdRnEeW3I7pNK91/1TOeXaJD52e7o', 'employee'),
-(3, 'manager1', '$pbkdf2-sha256$29000$fs/539u7V4pxjvEeI6TUWg$4xE4mG8iujptk7vkJ1EULKXnJ7FX.ocqUvsjtg5HgyM', 'employee'),
 (4, 'courier1', '$pbkdf2-sha256$29000$EgKAUAqhNIaQ0jqHUCrlPA$T5oy/0O1xL.qCjWC/3qQFOpNEDUzocxpXiltV3cMCLw', 'courier'),
 (5, 'courier2', '$pbkdf2-sha256$29000$EgKAUAqhNIaQ0jqHUCrlPA$T5oy/0O1xL.qCjWC/3qQFOpNEDUzocxpXiltV3cMCLw', 'courier'),
 (6, 'courier3', '$pbkdf2-sha256$29000$EgKAUAqhNIaQ0jqHUCrlPA$T5oy/0O1xL.qCjWC/3qQFOpNEDUzocxpXiltV3cMCLw', 'courier'),
@@ -688,7 +736,6 @@ SELECT setval('users_account_user_id_seq', 10, true);
 INSERT INTO persons (person_id, full_name, phone, email) VALUES
 (1, 'Администратор системы', '+70000000001', 'admin@delivery.local'),
 (2, 'Ольга Операторова', '+79020000001', 'operator1@example.local'),
-(3, 'Сергей Менеджеров', '+79020000002', 'manager1@example.local'),
 (4, 'Иван Курьеров', '+70000000002', 'courier1@delivery.local'),
 (5, 'Алексей Быстров', '+79030000001', 'courier2@example.local'),
 (6, 'Никита Грузов', '+79030000002', 'courier3@example.local'),
@@ -703,14 +750,13 @@ INSERT INTO clients (client_id, person_id, user_id, client_status) VALUES
 (1, 7, 7, 'active'),
 (2, 8, 8, 'active'),
 (3, 9, 9, 'active'),
-(4, 10, 10, 'blocked');
+(4, 10, 10, 'inactive');
 
 SELECT setval('clients_client_id_seq', 4, true);
 
 INSERT INTO employees (employee_id, user_id, person_id, branch_id, employee_role, is_active) VALUES
 (1, 1, 1, 1, 'admin', TRUE),
 (2, 2, 2, 1, 'operator', TRUE),
-(3, 3, 3, 2, 'manager', TRUE),
 (4, 4, 4, 1, 'courier', TRUE),
 (5, 5, 5, 2, 'courier', TRUE),
 (6, 6, 6, 3, 'courier', TRUE);
@@ -724,13 +770,19 @@ INSERT INTO couriers (employee_id, transport_type, capacity_kg) VALUES
 
 INSERT INTO delivery_statuses (status_id, code, name, description, sort_order) VALUES
 (1, 'CREATED', 'Создана', 'Доставка создана клиентом', 1),
-(2, 'PROCESSING', 'В обработке', 'Заказ обрабатывается оператором', 2),
-(3, 'COURIER_ASSIGNED', 'Курьер назначен', 'Назначен курьер на доставку', 3),
-(4, 'IN_TRANSIT', 'В пути', 'Посылка находится в пути', 4),
-(5, 'DELIVERED', 'Доставлена', 'Посылка доставлена получателю', 5),
-(6, 'CANCELLED', 'Отменена', 'Доставка отменена', 6);
+(2, 'REGISTERED', 'Зарегистрирована', 'Доставка зарегистрирована менеджером', 2),
+(3, 'WAITING_COURIER', 'Ожидает курьера', 'Ожидается курьер для забора посылки', 3),
+(4, 'COURIER_ASSIGNED', 'Курьер назначен', 'Курьер взял курьерскую заявку', 4),
+(5, 'COURIER_PICKED_UP', 'Курьер получил посылку', 'Курьер получил посылку у отправителя', 5),
+(6, 'AT_ORIGIN_BRANCH', 'В филиале отправления', 'Посылка находится в филиале отправления', 6),
+(7, 'IN_TRANSIT', 'В пути', 'Посылка находится в пути между филиалами', 7),
+(8, 'AT_DESTINATION_BRANCH', 'В филиале назначения', 'Посылка находится в филиале назначения', 8),
+(9, 'COURIER_DELIVERING_RECIPIENT', 'Курьер доставляет получателю', 'Курьер доставляет посылку до получателя', 9),
+(10, 'COURIER_DELIVERED', 'Курьер доставил посылку', 'Курьер доставил посылку получателю', 10),
+(11, 'DELIVERED', 'Доставлена', 'Доставка завершена менеджером', 11),
+(12, 'CANCELLED', 'Отменена', 'Доставка отменена', 12);
 
-SELECT setval('delivery_statuses_status_id_seq', 6, true);
+SELECT setval('delivery_statuses_status_id_seq', 12, true);
 
 SELECT set_config('app.changed_by_employee_id', '2', true);
 SELECT set_config('app.status_comment', 'SQL: доставка создана', true);
@@ -759,16 +811,38 @@ INSERT INTO deliveries (
 
 SELECT setval('deliveries_delivery_id_seq', 6, true);
 
-CALL assign_courier_to_delivery(2, 4, 2, 'pickup', 12, 250.00, 2, 'SQL: назначен курьер');
-CALL assign_courier_to_delivery(3, 5, 3, 'delivery', 11, 350.00, 2, 'SQL: назначен курьер');
-CALL assign_courier_to_delivery(4, 6, 4, 'pickup', 11, 600.00, 2, 'SQL: назначен курьер на забор');
-CALL assign_courier_to_delivery(4, 6, 1, 'delivery', 13, 600.00, 2, 'SQL: назначен курьер получателю');
-CALL assign_courier_to_delivery(6, 4, 2, 'pickup', 12, 400.00, 2, 'SQL: назначен курьер');
+CALL change_delivery_status(2, 2, 2, 'SQL: доставка зарегистрирована');
+CALL assign_courier_to_delivery(2, 4, 2, 'pickup', 12, 250.00, 4, 'SQL: курьер взял заявку');
+CALL change_delivery_status(2, 3, 2, 'SQL: ожидается курьер');
+CALL change_delivery_status(2, 4, 4, 'SQL: курьер назначен');
 
-CALL change_delivery_status(3, 4, 2, 'SQL: доставка передана в транспортировку');
-CALL change_delivery_status(4, 4, 2, 'SQL: доставка передана в транспортировку');
-CALL change_delivery_status(4, 5, 2, 'SQL: доставка завершена');
-CALL change_delivery_status(5, 6, 2, 'SQL: доставка отменена');
+CALL change_delivery_status(3, 2, 2, 'SQL: доставка зарегистрирована');
+CALL change_delivery_status(3, 6, 1, 'SQL: посылка в филиале отправления');
+CALL change_delivery_status(3, 7, 2, 'SQL: доставка передана в транспортировку');
+CALL change_delivery_status(3, 8, 2, 'SQL: посылка прибыла в филиал назначения');
+CALL assign_courier_to_delivery(3, 4, 3, 'delivery', 11, 350.00, 4, 'SQL: курьер взял доставку получателю');
+CALL change_delivery_status(3, 9, 4, 'SQL: курьер доставляет получателю');
+CALL change_delivery_status(3, 10, 4, 'SQL: курьер доставил посылку');
+
+CALL change_delivery_status(4, 2, 2, 'SQL: доставка зарегистрирована');
+CALL assign_courier_to_delivery(4, 6, 4, 'pickup', 11, 600.00, 6, 'SQL: курьер взял заявку на забор');
+CALL change_delivery_status(4, 3, 2, 'SQL: ожидается курьер');
+CALL change_delivery_status(4, 4, 6, 'SQL: курьер назначен');
+CALL change_delivery_status(4, 5, 6, 'SQL: курьер получил посылку');
+CALL change_delivery_status(4, 6, 2, 'SQL: посылка в филиале отправления');
+CALL change_delivery_status(4, 7, 2, 'SQL: доставка передана в транспортировку');
+CALL change_delivery_status(4, 8, 1, 'SQL: посылка прибыла в филиал назначения');
+CALL assign_courier_to_delivery(4, 6, 1, 'delivery', 13, 600.00, 6, 'SQL: курьер взял доставку получателю');
+CALL change_delivery_status(4, 9, 6, 'SQL: курьер доставляет получателю');
+CALL change_delivery_status(4, 10, 6, 'SQL: курьер доставил посылку');
+CALL change_delivery_status(4, 11, 2, 'SQL: доставка завершена');
+
+CALL change_delivery_status(6, 2, 2, 'SQL: доставка зарегистрирована');
+CALL assign_courier_to_delivery(6, 4, 2, 'pickup', 12, 400.00, 4, 'SQL: курьер взял заявку');
+CALL change_delivery_status(6, 3, 2, 'SQL: ожидается курьер');
+CALL change_delivery_status(6, 4, 4, 'SQL: курьер назначен');
+
+CALL change_delivery_status(5, 12, 2, 'SQL: доставка отменена');
 
 SELECT setval('delivery_courier_assignments_assignment_id_seq', (SELECT COALESCE(MAX(assignment_id), 1) FROM delivery_courier_assignments), true);
 SELECT setval('delivery_status_history_history_id_seq', (SELECT COALESCE(MAX(history_id), 1) FROM delivery_status_history), true);

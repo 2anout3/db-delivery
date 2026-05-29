@@ -12,7 +12,6 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 DEMO_PASSWORDS_BY_LOGIN = {
     "admin": "admin123",
     "operator1": "operator123",
-    "manager1": "manager123",
     "courier1": "courier123",
     "courier2": "courier123",
     "courier3": "courier123",
@@ -94,6 +93,16 @@ def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
     ).scalar_one_or_none()
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
+    token = create_access_token({"sub": str(user.user_id), "role": user.role})
+    return schemas.Token(access_token=token, role=user.role, user_id=user.user_id)
+
+
+@router.post("/demo-login/{user_id}", response_model=schemas.Token)
+def demo_login(user_id: int, db: Session = Depends(get_db)):
+    user = db.get(models.UserAccount, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
 
     token = create_access_token({"sub": str(user.user_id), "role": user.role})
     return schemas.Token(access_token=token, role=user.role, user_id=user.user_id)

@@ -68,7 +68,7 @@ class ClientCreate(BaseModel):
     full_name: str = Field(min_length=3, max_length=120)
     phone: str = Field(min_length=5, max_length=20)
     email: EmailStr
-    client_status: str = Field(default="active", pattern="^(active|inactive|blocked)$", max_length=20)
+    client_status: str = Field(default="active", pattern="^(active|inactive)$", max_length=20)
 
 
 class ClientRead(BaseModel):
@@ -109,6 +109,19 @@ class DeliveryCreate(BaseModel):
     declared_value: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
     description: Optional[str] = Field(default=None, min_length=3, max_length=255)
     sender_courier_required: bool = False
+
+
+class DeliveryCostPreviewRequest(BaseModel):
+    origin_branch_id: int
+    destination_branch_id: int
+    declared_weight_kg: Decimal = Field(gt=0, max_digits=8, decimal_places=2)
+    declared_value: Decimal = Field(ge=0, max_digits=10, decimal_places=2)
+
+
+class DeliveryCostPreviewRead(BaseModel):
+    base_cost: Decimal
+    extra_cost: Decimal
+    total_cost: Decimal
 
 
 class RecipientCourierRequest(BaseModel):
@@ -262,7 +275,7 @@ class AdminAccountCreate(BaseModel):
     phone: str = Field(min_length=5, max_length=20)
     email: EmailStr
     role: str = Field(pattern="^(client|employee|admin|courier)$")
-    client_status: str = Field(default="active", pattern="^(active|inactive|blocked)$", max_length=20)
+    client_status: str = Field(default="active", pattern="^(active|inactive)$", max_length=20)
     branch_id: Optional[int] = None
     employee_role: Optional[str] = Field(default=None, max_length=20)
     is_active: bool = True

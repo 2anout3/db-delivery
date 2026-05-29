@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -8,6 +9,33 @@ from ..security import get_current_user
 
 
 router = APIRouter(prefix="/api/deliveries", tags=["deliveries"])
+
+
+@router.post("/cost-preview", response_model=schemas.DeliveryCostPreviewRead)
+def preview_delivery_cost(
+    payload: schemas.DeliveryCostPreviewRequest,
+    db: Session = Depends(get_db),
+    current_user: models.UserAccount = Depends(get_current_user),
+):
+    services.require_capability(current_user, "can_create_delivery")
+
+    try:
+        cost = db.execute(
+            text(
+                "SELECT base_cost, extra_cost, total_cost "
+                "FROM calculate_delivery_cost(:origin_branch_id, :destination_branch_id, :weight, :declared_value)"
+            ),
+            {
+                "origin_branch_id": payload.origin_branch_id,
+                "destination_branch_id": payload.destination_branch_id,
+                "weight": payload.declared_weight_kg,
+                "declared_value": payload.declared_value,
+            },
+        ).mappings().one()
+    except DBAPIError as exc:
+        raise HTTPException(status_code=400, detail="Не удалось рассчитать стоимость для выбранного маршрута") from exc
+
+    return schemas.DeliveryCostPreviewRead(**cost)
 
 
 @router.post("", response_model=schemas.DeliveryRead, status_code=status.HTTP_201_CREATED)
@@ -167,6 +195,58 @@ def update_delivery_status(
     new_status = db.get(models.DeliveryStatus, payload.new_status_id)
     if not new_status:
         raise HTTPException(status_code=404, detail="Новый статус не найден")
+    effective_role = services.get_effective_role(current_user)
+    if effective_role == "courier":
+        assigned_services = {
+            item.service_type
+            for item in delivery.assignments
+            if current_user.employee and item.courier_id == current_user.employee.employee_id
+        }
+        is_assigned_to_courier = bool(assigned_services)
+        courier_can_set_status = (
+            is_assigned_to_courier
+            and (
+                (
+                    delivery.current_status.code == "COURIER_ASSIGNED"
+                    and new_status.code == "COURIER_PICKED_UP"
+                    and "pickup" in assigned_services
+                )
+                or (
+                    delivery.current_status.code == "AT_DESTINATION_BRANCH"
+                    and new_status.code == "COURIER_DELIVERING_RECIPIENT"
+                    and "delivery" in assigned_services
+                )
+                or (
+                    delivery.current_status.code == "COURIER_DELIVERING_RECIPIENT"
+                    and new_status.code == "COURIER_DELIVERED"
+                    and "delivery" in assigned_services
+                )
+            )
+        )
+        if not courier_can_set_status:
+            raise HTTPException(
+                status_code=403,
+                detail="Курьер может менять только статусы своих курьерских этапов",
+            )
+    else:
+        courier_only_statuses = {
+            "COURIER_ASSIGNED",
+            "COURIER_PICKED_UP",
+            "COURIER_DELIVERING_RECIPIENT",
+            "COURIER_DELIVERED",
+        }
+        if new_status.code in courier_only_statuses:
+            raise HTTPException(status_code=403, detail="Этот статус может поставить только назначенный курьер")
+        if effective_role not in {"employee", "admin"}:
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+        if new_status.code == "DELIVERED":
+            has_delivery_request = any(item.service_type == "delivery" for item in delivery.assignments)
+            if has_delivery_request and delivery.current_status.code != "COURIER_DELIVERED":
+                raise HTTPException(
+                    status_code=400,
+                    detail="При курьерской доставке получателю финальный статус доступен после отметки курьера",
+                )
+        services.ensure_operator_can_confirm_branch_receipt(current_user, delivery, new_status)
     services.validate_status_transition(delivery, new_status)
 
     employee_id = current_user.employee.employee_id if current_user.employee else delivery.created_by_employee_id
